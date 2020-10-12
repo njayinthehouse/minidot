@@ -1,0 +1,9 @@
+#lang racket
+(require redex)
+
+(define-language D
+  (T Bot Top (Type T T) (Path x) (P T T))
+  (e unit (lam x e) (type T) (app e e))
+  (x variable-not-otherwise-mentioned))
+
+
