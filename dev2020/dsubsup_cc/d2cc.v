@@ -81,11 +81,9 @@ Module Lang.
 
     with wf_ty : cx -> ty -> Set :=
     | wf_bot : forall {G},
-        wf_cx G ->
         wf_ty G tyBot
 
     | wf_top : forall {G},
-        wf_cx G ->
         wf_ty G tyTop
 
     | wf_typ : forall {G T1 T2},
@@ -106,7 +104,6 @@ Module Lang.
 
     with has_type : cx -> tm -> ty -> Set :=
     | t_var : forall {x G T1},
-        wf_cx G ->
         indexr G x = Some T1 ->
         has_type G (tmVar (varF x)) T1 (* Typing rule for varB? Not needed since we open T2?*)
 
@@ -158,20 +155,6 @@ Module Lang.
         subtype G T1' T1 ->
         subtype (T1' :: G) T2 T2' ->
         subtype G (tyPi T1 T2) (tyPi T1' T2').
-
-    Fixpoint from_wfTy {G : cx} {T : ty} (wfT : wf_ty G T) : wf_cx G :=
-      match wfT with
-      | wf_bot wfG | wf_top wfG => wfG
-      | wf_typ wfT1 _ | wf_pi wfT1 _ => from_wfTy wfT1
-      | wf_sel xT => from_hasType xT
-      end
-
-    with from_hasType {G : cx} {e : tm} {T : ty} (eT : has_type G e T) : wf_cx G :=
-           match eT with
-           | t_var wfG _ => wfG
-           | t_lam wfT _ | t_typ wfT => from_wfTy wfT
-           | t_app eT _ _ | t_dapp eT _ | t_sub eT _ => from_hasType eT
-           end.
 
   End D.
 
@@ -230,11 +213,13 @@ Module Lang.
         has_type G e' A ->
         has_type G (eApp e e') (substi B e').
 
+    Definition eImplies (A B : expr) : expr := eAll A B.
+
     Definition eExists (A B : expr) : expr :=
-      eAll (eSort prop) (eAll (eAll A (eAll B (eVar (varB 2)))) (eVar (varB 1))).
+      eAll (eSort prop) (eImplies (eAll A (eImplies B (eVar (varB 2)))) (eVar (varB 1))).
 
     Definition eAnd (A B : expr) : expr :=
-      eAll (eSort prop) (eAll (eAll A (eAll B (eVar (varB 2)))) (eVar (varB 1))).
+      eAll (eSort prop) (eImplies (eImplies A (eImplies B (eVar (varB 2)))) (eVar (varB 1))).
 
 (*
 The below attempt failed. We want a translateTy which translates G |- T type to [G] |- S : k.
@@ -269,12 +254,35 @@ get enough information to complete the D.wf_cons branch of translateCx.
   with translateTy {G : D.cx} {T : D.ty} (wfT : D.wf_ty G T) :
          sigT (fun G' => sigT (fun A => sigT (fun s => CC.has_type G' A (CC.eSort s)))).
 
-  Fixpoint translate
+  (* What if we remove the dependency of typechecking on context well-formedness? Then, our
+     translation function for types requires a proof that the type we're trying to translate
+     is well-formed. Maybe this helps untangle the type signatures? *)
+  Fail Fixpoint translateCx {G : D.cx} (wfG : D.wf_cx G) : sigT CC.wf_cx :=
+    match wfG with
+    | D.wf_nil => existT _ [] CC.wf_nil
+    | D.wf_cons _ _ => existT _ [] CC.wf_nil
+    end
 
-  Inductive translateCx : forall {G : D.cx}, D.wf_cx G ->
-                                             forall {G' : CC.cx}, CC.wf_cx G' -> Set :=
-  | WF_nil : translateCx D.wf_nil CC.wf_nil
-  | WF_cons : forall G T,
-      translateCx G G' ->
-      translateTy G T G ->
-      
+  with translateTy {G : D.cx} (wfG : D.wf_cx G) {T : D.ty} (wfT : D.wf_ty G T) :
+         sigT (fun A => sigT (fun s => translateCx)).
+
+  (* Of course that didn't work, I should've thought it through more. But I guess it's not
+     bad to find out that I was wrong by quickly coding it up, since this was relatively
+     small. *)
+
+  (* What if I just map (G, wfG, T, wfT) to (G', wfG', T', wfT') and then prove that my
+     mapping is the correct one? *)
+
+  Fail Fixpoint translateTy {G : D.cx} (wfG : D.wf_cx G) {T : D.ty} (wfT : D.wf_ty G T) :
+    sigT (fun G' => sigT (fun A => sigT (fun s => CC.has_type G' A (eSort s)))) :=
+    let G' := match wfG with
+             | D.wf_nil => []
+             | D.wf_cons wfG' wfT' => projT1 (translateTy wfG' wfT')
+             end
+    in let A := match wfT with
+               | D.wf_bot => eAll (eSort prop) (varB 0)
+               | D.wf_top => eExists (eSort prop) (varB 0)
+               | @D.wf_typ _ T1 T2 wfT1 wfT2 =>
+                 eExists (eSort prop) (eAnd (eImplies T1 (eVar (varB 0)))
+                                            (eImplies (eVar (varB 0)) T2))
+               end in 0.
