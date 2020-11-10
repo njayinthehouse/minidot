@@ -21,140 +21,198 @@ Module Lang.
   Module D.
 
     Inductive ty : Set :=
-    | tyBot : ty
-    | tyTop : ty
-    | tyTyp : ty -> ty -> ty
-    | tySel : var -> ty
-    | tyPi  : ty -> ty -> ty.
+    | TBot : ty
+    | TTop : ty
+    | TTyp : ty -> ty -> ty
+    | TSel : var -> ty
+    | TPi  : ty -> ty -> ty.
 
     Inductive tm : Set :=
-    | tmVar : var -> tm
-    | tmLam : ty -> tm -> tm
-    | tmApp : tm -> tm -> tm
-    | tmTyp : ty -> tm.
-(*
-    Inductive closedTy : nat -> nat -> ty -> Prop :=
-    | cl_Bot : forall b f, closedTy b f tyBot
-    | cl_Top : forall b f, closedTy b f tyTop
+    | tVar : var -> tm
+    | tLam : ty -> tm -> tm
+    | tApp : tm -> tm -> tm
+    | tTyp : ty -> tm.
 
-    | cl_Typ : forall b f T1 T2,
-        closedTy b f T1 ->
-        closedTy b f T2 ->
-        closedTy b f (tyTyp T1 T2)
+    Coercion tVar : var >-> tm.
 
-    | cl_SelB : forall b f x,
-        x < b ->
-        closedTy b f (tySel (varB x))
-
-    | cl_SelF : forall b f x,
-        x < f ->
-        closedTy b f (tySel (varF x))
-
-    | cl_Pi : forall b f T1 T2,
-        closedTy b f T1 ->
-        closedTy (S b) f T2 -> (* Is this really correct, given our type formation rule introduces a new free var? *)
-        closedTy b f (tyPi T1 T2).
-*)
-    Fixpoint appTy_aux (l : nat) (T : ty) (x : var) : ty :=
+    Fixpoint openTyWith_aux (l : nat) (T : ty) (x : var) : ty :=
       match T with
-      | tySel (varB y) => if beq_nat y l then tySel x else T
-      | tyTyp T1 T2 => tyTyp (appTy_aux l T1 x) (appTy_aux l T2 x)
-      | tyPi T1 T2 => tyPi (appTy_aux l T1 x) (appTy_aux (S l) T2 x)
-                           (* Call to T2 uses S l, since formation rule for pi types adds a
-                              free variable to the codomain type. *)
+      | TSel (varB y) => if beq_nat y l then TSel x else T
+      | TTyp T1 T2 => TTyp (openTyWith_aux l T1 x) (openTyWith_aux l T2 x)
+      | TPi T1 T2 => TPi (openTyWith_aux l T1 x) (openTyWith_aux (S l) T2 x)
       | _ => T
       end.
 
-    Definition appTy : ty -> var -> ty := appTy_aux 0.
-    Definition openTy (T : ty) : ty := appTy T (varF 0).
+    Definition openTyWith : ty -> var -> ty := openTyWith_aux 0.
 
     Definition cx : Set := cx ty.
 
-    Inductive wf_cx : cx -> Set :=
-    | wf_nil : wf_cx []
+    Definition openTy (G : cx) (T : ty) : ty := openTyWith T (varF (length G)).
 
-    | wf_cons : forall {G T},
-        wf_cx G ->
-        wf_ty G T ->
-       (*---------------*)
-        wf_cx (T :: G)
+    Fixpoint openTm_aux (l : nat) (g : nat) (e : tm) : tm :=
+      match e with
+      | tVar (varB x) => if beq_nat x l then tVar (varF g) else e
+      | tVar _ => e
+      | tLam T e' => tLam (openTyWith_aux l T (varF g)) (openTm_aux (S l) g e')
+      | tApp e1 e2 => tApp (openTm_aux l g e1) (openTm_aux l g e2)
+      | tTyp T => tTyp (openTyWith_aux l T (varF g))
+      end.
 
-    with wf_ty : cx -> ty -> Set :=
+    Definition openTm (G : cx) (e : tm) : tm := openTm_aux 0 (length G) e.
+
+    Inductive wf_ty : cx -> ty -> Set :=
     | wf_bot : forall {G},
-        wf_ty G tyBot
+        wf_ty G TBot
 
     | wf_top : forall {G},
-        wf_ty G tyTop
+        wf_ty G TTop
 
     | wf_typ : forall {G T1 T2},
         wf_ty G T1 ->
         wf_ty G T2 ->
-        wf_ty G (tyTyp T1 T2)
+        wf_ty G (TTyp T1 T2)
 
     (* Note that x has any type below. Restricting x : S ... T causes sel to be
        parametric in S and T. *)
     | wf_sel : forall {G x T},
-        has_type G (tmVar x) T ->
-        wf_ty G (tySel x)
+        has_type G (tVar x) T ->
+        wf_ty G (TSel x)
 
     | wf_pi : forall {G T1 T2},
         wf_ty G T1 ->
-        wf_ty (T1 :: G) T2 ->
-        wf_ty G (tyPi T1 T2)
+        wf_ty (T1 :: G) (openTy G T2) ->
+        wf_ty G (TPi T1 T2)
 
     with has_type : cx -> tm -> ty -> Set :=
-    | t_var : forall {x G T1},
+    | t_var : forall {G T1 x},
+        wf_ty G T1 ->
         indexr G x = Some T1 ->
-        has_type G (tmVar (varF x)) T1 (* Typing rule for varB? Not needed since we open T2?*)
+        has_type G (varF x) T1 (* Typing rule for varB? Not needed since we open T2?*)
 
     | t_lam : forall {G T1 T2 e},
         wf_ty G T1 ->
-        has_type (T1 :: G) e T2 ->
-        has_type G (tmLam T1 e) (tyPi T1 T2)
+        has_type (T1 :: G) (openTm G e) (openTy G T2) ->
+        has_type G (tLam T1 e) (TPi T1 T2)
 
     | t_app : forall {G T1 T2 e e'},
-        has_type G e (tyPi T1 T2) ->
+        has_type G e (TPi T1 T2) ->
         has_type G e' T1 ->
-        openTy T2 = T2 -> (* If opening T2 does not change T2 i.e. T2 is independent of e' *)
-        has_type G (tmApp e e') T2
+        openTy G T2 = T2 -> (* If opening T2 does not change T2 i.e. T2 is independent of e' *)
+        has_type G (tApp e e') T2
 
     | t_dapp : forall {G T1 T2 e x},
-        has_type G e (tyPi T1 T2) ->
-        has_type G (tmVar x) T1 ->
-        has_type G (tmApp e (tmVar x)) (appTy T2 x)
+        has_type G e (TPi T1 T2) ->
+        has_type G (tVar x) T1 ->
+        has_type G (tApp e (tVar x)) (openTyWith T2 x)
 
     | t_typ : forall {G T},
         wf_ty G T ->
-        has_type G (tmTyp T) (tyTyp T T)
+        has_type G (tTyp T) (TTyp T T)
 
-    | t_sub : forall {G e T1 T2},
+    | t_sub : forall {G T1 T2 e},
         has_type G e T1 ->
         subtype G T1 T2 ->
         has_type G e T2
 
     with subtype : cx -> ty -> ty -> Set :=
-    | s_bot : forall {G T}, subtype G tyBot T
-    | s_top : forall {G T}, subtype G T tyTop
+    | s_bot : forall {G T},
+        wf_ty G T ->
+        subtype G TBot T
+
+    | s_top : forall {G T},
+        wf_ty G T ->
+        subtype G T TTop
 
     | s_typ : forall {G T1 T2 T1' T2'},
         subtype G T1' T1 ->
         subtype G T2 T2' ->
-        subtype G (tyTyp T1 T2) (tyTyp T1' T2')
+        subtype G (TTyp T1 T2) (TTyp T1' T2')
 
-    | s_sel1 : forall {G x T1 T2},
-        has_type G (tmVar x) (tyTyp T1 T2) ->
-        subtype G T1 (tySel x)
+    | s_sel1 : forall {G T1 T2 x},
+        has_type G (tVar x) (TTyp T1 T2) ->
+        subtype G T1 (TSel x)
 
-    | s_sel2 : forall {G x T1 T2},
-        has_type G (tmVar x) (tyTyp T1 T2) ->
-        subtype G (tySel x) T2
-
-    | s_selx : forall {G x}, subtype G (tySel x) (tySel x)
+    | s_sel2 : forall {G T1 T2 x},
+        has_type G (tVar x) (TTyp T1 T2) ->
+        subtype G (TSel x) T2
 
     | s_pi : forall {G T1 T2 T1' T2'},
         subtype G T1' T1 ->
-        subtype (T1' :: G) T2 T2' ->
-        subtype G (tyPi T1 T2) (tyPi T1' T2').
+        subtype (T1' :: G) (openTy G T2) (openTy G T2') ->
+        subtype G (TPi T1 T2) (TPi T1' T2')
+
+    | s_refl : forall {G T},
+        wf_ty G T ->
+        subtype G T T
+
+    | s_trans : forall {G T1 T2 T3},
+        subtype G T1 T2 ->
+        subtype G T2 T3 ->
+        subtype G T1 T3.
+
+    Inductive wf_cx : cx -> Set :=
+    | wf_nil : wf_cx []
+
+    | wf_cons : forall {G T},
+        wf_ty G T ->
+        wf_cx G ->
+       (*---------------*)
+        wf_cx (T :: G).
+
+    Lemma strengthen_by_opening : forall {G T0 T T' x},
+        wf_ty (T0 :: G) (openTy G T) ->
+        has_type G (tVar x) T' ->
+        wf_ty G (openTyWith T x).
+    Admitted.
+
+    Lemma strengthen_by_independence : forall {G T T'},
+        wf_ty (T' :: G) (openTy G T) ->
+        openTy G T = T ->
+        wf_ty G T.
+    Proof.
+      intros. Admitted.
+
+    Corollary inversion_wf_pi_2 : forall {G T T'},
+        wf_ty G (TPi T T') ->
+        wf_ty (T :: G) (openTy G T').
+    Proof. intros. inversion H. assumption. Qed.
+
+    Lemma rename_by_subtyping {G T T1 T2}
+                             (wfT : wf_ty (T1 :: G) T)
+                             (ST : subtype G T1 T2) : wf_ty (T2 :: G) T.
+    Proof. Admitted.
+
+    (* All well typed terms have well formed types. *)
+    Fixpoint has_type_implies_wf {G T e} (eT : has_type G e T) : wf_ty G T
+    with subtype_implies_wf {G T T'} (ST : subtype G T T') : wf_ty G T * wf_ty G T'.
+      -  (* has_type G e T -> wf_ty G T *)
+        induction eT.
+        + (* t_var *) assumption.
+        + (* t_lam *) constructor. assumption. eauto.
+        + (* t_app *) eapply strengthen_by_independence. apply inversion_wf_pi_2.
+          eauto. auto.
+        + (* t_dapp*) eapply strengthen_by_opening. apply inversion_wf_pi_2.
+          eauto. eauto.
+        + (* t_typ *) constructor. assumption. assumption.
+        + (* t_sub *) exact (snd (subtype_implies_wf _ _ _ s)).
+      - (* subtype G T T' -> wf_ty G T * wf_ty G T' *)
+        induction ST.
+        + (* s_bot *) apply pair. constructor. assumption.
+        + (* s_top *) apply pair. assumption. constructor.
+        + (* s_typ *) apply pair; constructor; intuition; intuition.
+        + (* s_sel1 *) apply pair.
+          * pose (has_type_implies_wf _ _ _ h) as H. inversion H. assumption.
+          * econstructor. exact h.
+        + (* s_sel2 *) apply pair.
+          * econstructor. exact h.
+          * pose (has_type_implies_wf _ _ _ h) as H. inversion H. assumption.
+        + (* s_pi *) apply pair.
+          * constructor. intuition. eapply rename_by_subtyping. exact (fst IHST2).
+            assumption.
+          * constructor. intuition. intuition.
+        + (* s_refl *) intuition.
+        + (* s_trans *) intuition.
+          Qed.
 
   End D.
 
@@ -163,126 +221,275 @@ Module Lang.
     Inductive sort : Set := prop | type.
 
     Inductive expr : Set :=
-    | eSort : sort -> expr
-    | eVar : var -> expr
-    | eLam : expr -> expr -> expr
-    | eAll : expr -> expr -> expr
-    | eApp : expr -> expr -> expr.
+    | TSort : sort -> expr
+    | TAll : expr -> expr -> expr
+    | TSig : expr -> expr -> expr
+    | tLam : expr -> expr -> expr
+    | tApp : expr -> expr -> expr
+    | tVar : var -> expr
+    | tPair : expr -> expr -> expr
+    | tFst : expr -> expr
+    | tSnd : expr -> expr.
+
+    Coercion tVar : var >-> expr.
 
     Definition cx : Set := cx expr.
 
-    Fixpoint substi_aux (l : nat) (e : expr) (e' : expr) : expr :=
+    Fixpoint openWith_aux (l : nat) (e : expr) (e' : expr) : expr :=
       match e with
-      | eVar (varB x) => if beq_nat l x then e' else e
-      | eLam A e => eLam (substi_aux l A e') (substi_aux (S l) e e')
-      | eAll A B => eAll (substi_aux l A e') (substi_aux (S l) B e')
-      | eApp e1 e2 => eApp (substi_aux l e1 e') (substi_aux l e2 e')
+      | tVar (varB x) => if beq_nat l x then e' else e
+      | TAll A B => TAll (openWith_aux l A e') (openWith_aux (S l) B e')
+      | TSig A B => TSig (openWith_aux l A e') (openWith_aux (S l) B e')
+      | tLam A e => tLam (openWith_aux l A e') (openWith_aux (S l) e e')
+      | tApp e1 e2 => tApp (openWith_aux l e1 e') (openWith_aux l e2 e')
+      | tPair e1 e2 => tPair (openWith_aux l e1 e') (openWith_aux l e2 e')
+      | tFst e1 => tFst (openWith_aux l e1 e')
+      | tSnd e1 => tSnd (openWith_aux l e1 e')
       | _ => e
       end.
 
-    Definition substi : expr -> expr -> expr := substi_aux 0.
+    Definition openWith : expr -> expr -> expr := openWith_aux 0.
+    Definition open (G : cx) (e : expr) : expr :=
+      openWith e (tVar (varF (length G))).
+
+    Fixpoint close_aux (l : nat) (n : nat) (e : expr) : expr :=
+      match e with
+      | tVar (varF x) => if beq_nat x n then varB l else e
+      | TAll A B => TAll (close_aux l n A) (close_aux (S l) n B)
+      | TSig A B => TSig (close_aux l n A) (close_aux (S l) n B)
+      | tLam A e => tLam (close_aux l n A) (close_aux (S l) n e)
+      | tApp e1 e2 => tApp (close_aux l n e1) (close_aux l n e2)
+      | tPair e1 e2 => tPair (close_aux l n e1) (close_aux l n e2)
+      | tFst e1 => tFst (close_aux l n e1)
+      | tSnd e1 => tSnd (close_aux l n e1)
+      | _ => e
+      end.
+
+    Definition close' : nat -> expr -> expr := close_aux 0.
+    Definition close (G : cx) : expr -> expr := close' (length G).
+
+    Inductive has_type : cx -> expr -> expr -> Set :=
+    | t_ax : forall {G},
+        has_type G (TSort prop) (TSort type)
+
+    | t_var : forall {G A x},
+        indexr G x = Some A ->
+        has_type G (varF x) A (* Typing rule for varB? Not needed since we open T2*)
+
+    | t_all : forall {G A B s s'},
+        has_type G A (TSort s) ->
+        has_type (A :: G) (open G B) (TSort s') ->
+        has_type G (TAll A B) (TSort s')
+
+    | t_sig : forall {G A B s s'},
+        has_type G A (TSort s) ->
+        has_type (A :: G) (open G B) (TSort s') ->
+        has_type G (TSig A B) (TSort s')
+
+    | t_lam : forall {G A B s e},
+        has_type G A (TSort s) ->
+        has_type (A :: G) (open G e) (open G B) ->
+        has_type G (tLam A e) (TAll A B)
+
+    | t_app : forall {G A B e e'},
+        has_type G e (TAll A B) ->
+        has_type G e' A ->
+        has_type G (tApp e e') (openWith B e')
+
+    | t_pair : forall {G A B e e'},
+        has_type G e A ->
+        has_type G e' (openWith B e) ->
+        has_type G (tPair e e') (TSig A B)
+
+    | t_fst : forall {G A B e},
+        has_type G e (TSig A B) ->
+        has_type G (tFst e) A
+
+    | t_snd : forall {G A B e},
+        has_type G e (TSig A B) ->
+        has_type G (tSnd e) (openWith B (tFst e))
+
+    | t_conv : forall {G A B s e},
+        has_type G e A ->
+        eq_cc G A B (TSort s) ->
+        has_type G e B
+
+    with eq_cc : cx -> expr -> expr -> expr -> Set :=
+    | eq_beta : forall {G A B e e'},
+        has_type (A :: G) e (open G B) ->
+        has_type G e' A ->
+        eq_cc G (tApp (tLam A e) e') (openWith e e') (openWith B e')
+
+    | eq_eta : forall {G A B e},
+        has_type G e (TAll A B) ->
+        eq_cc G (tLam A (tApp e (varB 0))) e (TAll A B)
+
+    | eq_all : forall {G A B A' B' sA sB},
+        eq_cc G A A' (TSort sA) ->
+        eq_cc (A :: G) (open G B) (open G B') (TSort sB) ->
+        eq_cc G (TAll A B) (TAll A' B') (TSort sB)
+
+    | eq_sig : forall {G A B A' B' sA sB},
+        eq_cc G A A' (TSort sA) ->
+        eq_cc (A :: G) (open G B) (open G B') (TSort sB) ->
+        eq_cc G (TSig A B) (TSig A' B') (TSort sB)
+
+    | eq_fst : forall {G A B s e e'},
+        has_type G (TSig A B) (TSort s) ->
+        has_type G e A ->
+        has_type G e' (openWith B e) ->
+        eq_cc G (tFst (tPair e e')) e A
+
+    | eq_snd : forall {G A B s e e'},
+        has_type G (TSig A B) (TSort s) ->
+        has_type G e A ->
+        has_type G e' (openWith B e) ->
+        eq_cc G (tSnd (tPair e e')) e' (openWith B e)
+
+    | eq_pair : forall {G A B e},
+        has_type G e (TSig A B) ->
+        eq_cc G (tPair (tFst e) (tSnd e)) e (TSig A B)
+
+    | eq_lam : forall {G A A' B e e' s},
+        eq_cc G A A' (TSort s) ->
+        eq_cc (A :: G) (open G e) (open G e') (open G B) ->
+        eq_cc G (tLam A e) (tLam A' e') (TAll A B)
+
+    | eq_app : forall {G A B e1 e2 e1' e2'},
+        eq_cc G e1 e1' (TAll A B) ->
+        eq_cc G e2 e2' A ->
+        eq_cc G (tApp e1 e2) (tApp e1' e2') (openWith B e2)
+
+    | eq_refl : forall {G e A},
+        has_type G e A ->
+        eq_cc G e e A
+
+    | eq_sym : forall {G A e e'},
+        eq_cc G e e' A ->
+        eq_cc G e' e A
+
+    | eq_trans : forall {G A e1 e2 e3},
+        eq_cc G e1 e2 A ->
+        eq_cc G e2 e3 A ->
+        eq_cc G e1 e3 A.
 
     Inductive wf_cx : cx -> Set :=
     | wf_nil : wf_cx []
     | wf_cons : forall {G A s},
+        has_type G A (TSort s) ->
         wf_cx G ->
-        has_type G A (eSort s) ->
-        wf_cx (A :: G)
+        wf_cx (A :: G).
 
-    with has_type : cx -> expr -> expr -> Set :=
-    | t_ax : forall {G},
-        has_type G (eSort prop) (eSort type)
+    Definition TBot : expr := TAll (TSort prop) (varB 0).
 
-    | t_var : forall {G x A},
-        wf_cx G ->
-        indexr G x = Some A ->
-        has_type G (eVar (varF x)) A (* Typing rule for varB? Not needed since we open T2*)
+    Definition TTop : expr := TSig (TSort prop) (varB 0).
 
-    | t_lam : forall {G e A B s},
-        has_type G A (eSort s) ->
-        has_type (A :: G) e B ->
-        has_type G (eLam A e) (eAll A B)
+    Definition TTyp (A B : expr) : expr :=
+      TSig (TSort prop) (TSig (TAll A (varB 1)) (TAll (varB 1) B)).
 
-    | t_all : forall {G A B s s'},
-        has_type G A (eSort s) ->
-        has_type G B (eSort s') ->
-        has_type G (eAll A B) (eSort s')
+    Definition TSel (e : expr) : expr := tFst e.
+    Definition tSel1 (e : expr) : expr := tFst (tSnd e).
+    Definition tSel2 (e : expr) : expr := tSnd (tSnd e).
 
-    | t_app : forall {G e e' A B},
-        has_type G e (eAll A B) ->
-        has_type G e' A ->
-        has_type G (eApp e e') (substi B e').
+    Definition tId A : expr := tLam A (tVar (varB 0)).
+    Definition tTyp (A : expr) : expr := tPair A (tPair (tId A) (tId A)).
+    Definition tComp (e e' A : expr) := tLam A (tApp e (tApp e' (varB 0))).
 
-    Definition eImplies (A B : expr) : expr := eAll A B.
+  Definition bind {A B : Type} (a : option A) (f : A -> option B) : option B :=
+    match a with
+    | None => None
+    | Some a' => f a'
+    end.
 
-    Definition eExists (A B : expr) : expr :=
-      eAll (eSort prop) (eImplies (eAll A (eImplies B (eVar (varB 2)))) (eVar (varB 1))).
+  Fixpoint translateTy {G T} (wfT : D.wf_ty G T) (k : nat) : option CC.expr :=
+    match k with
+    | 0 => None
+    | S k' =>
+      match wfT in D.wf_ty G T with
+      | D.wf_bot           => Some CC.TBot
+      | D.wf_top           => Some CC.TTop
 
-    Definition eAnd (A B : expr) : expr :=
-      eAll (eSort prop) (eImplies (eImplies A (eImplies B (eVar (varB 2)))) (eVar (varB 1))).
+      | D.wf_typ wfT1 wfT2 =>
+        bind (translateTy wfT1 k') (fun A =>
+        bind (translateTy wfT2 k') (fun B =>
+        Some (CC.TTyp A B)))
 
-(*
-The below attempt failed. We want a translateTy which translates G |- T type to [G] |- S : k.
-But Coq does not allow us to use translateCx in the type of translateTy, so we cannot
-specify environment [G]'s relation to G. However, abstracting over [G] means that we don't
-get enough information to complete the D.wf_cons branch of translateCx.
-*)
-  Fail Fixpoint translateCx {G : D.cx} (wfG : D.wf_cx G) : sigT CC.wf_cx :=
-    match wfG with
-    | @D.wf_nil => existT CC.wf_cx [] CC.wf_nil
-    | @D.wf_cons _ T wfG wfT =>
-      match translateCx wfG, translateTy wfT with
-      | existT _ G' wfG', existT _ _ (existT _ A (existT _ _ wfA)) =>
-        existT _ (A :: G') (CC.wf_cons wfG' wfA)
+      | D.wf_sel xT =>
+        bind (translateTm xT k') (fun A => Some (CC.TSel A))
+
+      | D.wf_pi wfT1 wfT2 =>
+        bind (translateTy wfT1 k') (fun A =>
+        bind (translateTy wfT2 k') (fun B =>
+        Some (CC.TAll A B)))
       end
     end
+  with
+  translateTm {G e T} (eT : D.has_type G e T) (k : nat) : option CC.expr :=
+    match k with
+    | 0 => None
+    | S k' =>
+      match eT in D.has_type G e T with
+      | @D.t_var _ _ x _ _ => Some (CC.tVar (varF x))
 
-  with translateTy {G : D.cx} {T : D.ty} (wfT : D.wf_ty G T) :
-         sigT (fun s =>
-                 sigT (fun A => has_type (translateCx (D.from_wfTy wfT) A (eSort s)))).
+      | D.t_lam wfT eT' =>
+        bind (translateTy wfT k') (fun A =>
+        bind (translateTm eT' k') (fun e' =>
+        Some (CC.tLam A (close' (length G) e'))))
 
-  Fail Fixpoint translateCx {G : D.cx} (wfG : D.wf_cx G) : sigT CC.wf_cx :=
-    match wfG with
-    | @D.wf_nil => existT CC.wf_cx [] CC.wf_nil
-    | @D.wf_cons _ T wfG wfT =>
-      match translateCx wfG, translateTy wfT with
-      | existT _ G' wfG', existT _ _ (existT _ A (existT _ _ wfA)) =>
-        existT _ (A :: G') (CC.wf_cons wfG' wfA)
+      | D.t_app eT eT' _ | D.t_dapp eT eT' =>
+        bind (translateTm eT k') (fun t =>
+        bind (translateTm eT' k') (fun t' =>
+        Some (CC.tApp t t')))
+
+      | D.t_typ wfT =>
+        bind (translateTy wfT k') (fun A => Some (CC.TTyp A A))
+
+      | D.t_sub eT ST =>
+        bind (translateSub ST k') (fun f =>
+        bind (translateTm eT k') (fun t =>
+        Some (CC.tApp f t)))
       end
     end
+  with
+  translateSub {G T1 T2} (ST : D.subtype G T1 T2) (k : nat) : option CC.expr :=
+    match k with
+    | 0 => None
+    | S k' =>
+      let wfTP := D.subtype_implies_wf ST in
+      bind (translateTy (fst wfTP) k') (fun A1 =>
+      bind (translateTy (snd wfTP) k') (fun A2 =>
+      bind
+         (match ST with
+          | D.s_bot _ => Some (CC.tApp (varB 0) A2)
+          | D.s_top _ => Some (CC.tPair A1 A1)
 
-  with translateTy {G : D.cx} {T : D.ty} (wfT : D.wf_ty G T) :
-         sigT (fun G' => sigT (fun A => sigT (fun s => CC.has_type G' A (CC.eSort s)))).
+          | D.s_typ ST1 ST2 =>
+            bind (translateTy (fst (D.subtype_implies_wf ST1)) k') (fun B =>
+            bind (translateSub ST1 k') (fun B2A =>
+            bind (translateSub ST2 k') (fun A'2B' =>
+            Some
+            (CC.tPair (CC.TSel (varB 0))
+              (CC.tPair (CC.tComp (CC.tSel1 (varB 0)) B2A B)
+                        (CC.tComp A'2B' (CC.tSel2 (varB 0)) (CC.TSel (varB 0))))))))
 
-  (* What if we remove the dependency of typechecking on context well-formedness? Then, our
-     translation function for types requires a proof that the type we're trying to translate
-     is well-formed. Maybe this helps untangle the type signatures? *)
-  Fail Fixpoint translateCx {G : D.cx} (wfG : D.wf_cx G) : sigT CC.wf_cx :=
-    match wfG with
-    | D.wf_nil => existT _ [] CC.wf_nil
-    | D.wf_cons _ _ => existT _ [] CC.wf_nil
-    end
+          | D.s_sel1 xT =>
+            bind (translateTm xT k') (fun x =>
+            Some (CC.tApp (CC.tSel1 x) (varB 0)))
 
-  with translateTy {G : D.cx} (wfG : D.wf_cx G) {T : D.ty} (wfT : D.wf_ty G T) :
-         sigT (fun A => sigT (fun s => translateCx)).
+          | D.s_sel2 xT =>
+            bind (translateTm xT k') (fun x =>
+            Some (CC.tApp (CC.tSel2 x) (varB 0)))
 
-  (* Of course that didn't work, I should've thought it through more. But I guess it's not
-     bad to find out that I was wrong by quickly coding it up, since this was relatively
-     small. *)
+          | D.s_pi ST1 ST2 =>
+            bind (translateSub ST1 k') (fun B2A =>
+            bind (translateSub ST2 k') (fun A'2B' =>
+            Some (CC.tApp A'2B' (CC.tApp (varB 0) (CC.tApp B2A (varB 1))))))
 
-  (* What if I just map (G, wfG, T, wfT) to (G', wfG', T', wfT') and then prove that my
-     mapping is the correct one? *)
+          | D.s_refl _ => Some (tVar (varB 0))
 
-  Fail Fixpoint translateTy {G : D.cx} (wfG : D.wf_cx G) {T : D.ty} (wfT : D.wf_ty G T) :
-    sigT (fun G' => sigT (fun A => sigT (fun s => CC.has_type G' A (eSort s)))) :=
-    let G' := match wfG with
-             | D.wf_nil => []
-             | D.wf_cons wfG' wfT' => projT1 (translateTy wfG' wfT')
-             end
-    in let A := match wfT with
-               | D.wf_bot => eAll (eSort prop) (varB 0)
-               | D.wf_top => eExists (eSort prop) (varB 0)
-               | @D.wf_typ _ T1 T2 wfT1 wfT2 =>
-                 eExists (eSort prop) (eAnd (eImplies T1 (eVar (varB 0)))
-                                            (eImplies (eVar (varB 0)) T2))
-               end in 0.
+          | D.s_trans ST12 ST23 =>
+            bind (translateSub ST12 k') (fun A2B =>
+            bind (translateSub ST23 k') (fun B2C =>
+            Some (CC.tApp B2C (CC.tApp A2B (varB 0)))))
+          end) (fun e => Some (CC.tLam A1 e))))
+    end.
