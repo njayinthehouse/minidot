@@ -3,6 +3,7 @@ Require Import Lists.List.
 Require Import Init.Specif.
 Import ListNotations.
 Import Notations.
+Require Import Program.Equality.
 
 Module Lang.
 
@@ -139,6 +140,7 @@ Module Lang.
     | s_pi : forall {G T1 T2 T1' T2'},
         subtype G T1' T1 ->
         subtype (T1' :: G) (openTy G T2) (openTy G T2') ->
+        wf_ty (T1 :: G) (openTy G T2) ->
         subtype G (TPi T1 T2) (TPi T1' T2')
 
     | s_refl : forall {G T},
@@ -163,6 +165,12 @@ Module Lang.
         wf_ty (T0 :: G) (openTy G T) ->
         has_type G (tVar x) T' ->
         wf_ty G (openTyWith T x).
+    Proof.
+      intros. induction T.
+      - constructor.
+      - constructor.
+      - unfold openTyWith. simpl. inversion H; subst. constructor; intuition.
+      - admit.
     Admitted.
 
     Lemma strengthen_by_independence : forall {G T T'},
@@ -170,18 +178,22 @@ Module Lang.
         openTy G T = T ->
         wf_ty G T.
     Proof.
-      intros. Admitted.
+      intros. rewrite H0 in H. induction H.
+      - constructor.
+      - constructor.
+      - admit.
+    Admitted.
 
     Corollary inversion_wf_pi_2 : forall {G T T'},
         wf_ty G (TPi T T') ->
         wf_ty (T :: G) (openTy G T').
     Proof. intros. inversion H. assumption. Qed.
-
+(*
     Lemma rename_by_subtyping {G T T1 T2}
-                             (wfT : wf_ty (T1 :: G) T)
-                             (ST : subtype G T1 T2) : wf_ty (T2 :: G) T.
+                             (wfT : wf_ty (T2 :: G) T)
+                             (ST : subtype G T1 T2) : wf_ty (T1 :: G) T.
     Proof. Admitted.
-
+*)
     (* All well typed terms have well formed types. *)
     Fixpoint has_type_implies_wf {G T e} (eT : has_type G e T) : wf_ty G T
     with subtype_implies_wf {G T T'} (ST : subtype G T T') : wf_ty G T * wf_ty G T'.
@@ -207,8 +219,7 @@ Module Lang.
           * econstructor. exact h.
           * pose (has_type_implies_wf _ _ _ h) as H. inversion H. assumption.
         + (* s_pi *) apply pair.
-          * constructor. intuition. eapply rename_by_subtyping. exact (fst IHST2).
-            assumption.
+          * constructor. intuition. assumption.
           * constructor. intuition. intuition.
         + (* s_refl *) intuition.
         + (* s_trans *) intuition.
@@ -266,6 +277,7 @@ Module Lang.
       end.
 
     Definition close' : nat -> expr -> expr := close_aux 0.
+    (* Write examples *)
     Definition close (G : cx) : expr -> expr := close' (length G).
 
     Inductive has_type : cx -> expr -> expr -> Set :=
@@ -480,7 +492,7 @@ Module Lang.
             bind (translateTm xT k') (fun x =>
             Some (CC.tApp (CC.tSel2 x) (varB 0)))
 
-          | D.s_pi ST1 ST2 =>
+          | D.s_pi ST1 ST2 _ =>
             bind (translateSub ST1 k') (fun B2A =>
             bind (translateSub ST2 k') (fun A'2B' =>
             Some (CC.tApp A'2B' (CC.tApp (varB 0) (CC.tApp B2A (varB 1))))))
@@ -493,3 +505,10 @@ Module Lang.
             Some (CC.tApp B2C (CC.tApp A2B (varB 0)))))
           end) (fun e => Some (CC.tLam A1 e))))
     end.
+
+  (* TODO:
+     1. Check out well-founded recursion and induction. Chlipala's book
+     2. Complete those substitution lemmas
+     3. Write the translation using well-founded recursion, or any method which
+        makes it total.
+     4. Prove that translated expressions are well-typed in CoC. *)
