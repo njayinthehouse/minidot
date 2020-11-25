@@ -1,23 +1,26 @@
 Require Import Arith.EqNat.
 Require Import Lists.List.
 Require Import Init.Specif.
+Require Import Init.Nat.
 Import ListNotations.
 Import Notations.
 Require Import Program.Equality.
 
 Module Lang.
 
-  Inductive var : Set :=
-  | varF : nat -> var
-  | varB : nat -> var.
+  Definition var : Set := nat.
 
   Definition cx (ty : Set) : Set := list ty.
 
-  Fixpoint indexr {ty : Set} (G : cx ty) (n : nat) : option ty :=
-    match G with
-    | [] => None
-    | T :: G' => if (beq_nat n (length G')) then Some T else indexr G' n
+  Fixpoint get {ty} (G : cx ty) (x : var) : option ty :=
+    match G, x with
+    | [], _ => None
+    | T :: G, 0 => Some T
+    | T :: G, S x' => get G x'
     end.
+
+  Definition closed {ty} (G : cx ty) (x : var) : Set := sigT (fun T => get G x = Some T).
+  Definition closed' {ty} (G : cx ty) (x : var) : Set := x < (length G).
 
   Module D.
 
@@ -36,118 +39,143 @@ Module Lang.
 
     Coercion tVar : var >-> tm.
 
-    Fixpoint openTyWith_aux (l : nat) (T : ty) (x : var) : ty :=
-      match T with
-      | TSel (varB y) => if beq_nat y l then TSel x else T
-      | TTyp T1 T2 => TTyp (openTyWith_aux l T1 x) (openTyWith_aux l T2 x)
-      | TPi T1 T2 => TPi (openTyWith_aux l T1 x) (openTyWith_aux (S l) T2 x)
-      | _ => T
-      end.
-
-    Definition openTyWith : ty -> var -> ty := openTyWith_aux 0.
-
     Definition cx : Set := cx ty.
 
-    Definition openTy (G : cx) (T : ty) : ty := openTyWith T (varF (length G)).
-
-    Fixpoint openTm_aux (l : nat) (g : nat) (e : tm) : tm :=
-      match e with
-      | tVar (varB x) => if beq_nat x l then tVar (varF g) else e
-      | tVar _ => e
-      | tLam T e' => tLam (openTyWith_aux l T (varF g)) (openTm_aux (S l) g e')
-      | tApp e1 e2 => tApp (openTm_aux l g e1) (openTm_aux l g e2)
-      | tTyp T => tTyp (openTyWith_aux l T (varF g))
+(*
+    Fixpoint closedTy (G : cx) (T : ty) : Prop :=
+      match T with
+      | TSel x => closed G x
+      | TTyp T1 T2 => closedTy G T1 /\ closedTy G T2
+      | TPi T1 T2 => closedTy G T1 /\ closedTy (T1 :: G) T2
+      | _ => True
       end.
+*)
+    Inductive closedTy (G : cx) : ty -> Set :=
+    | cl_bot : closedTy G TBot
+    | cl_top : closedTy G TTop
 
-    Definition openTm (G : cx) (e : tm) : tm := openTm_aux 0 (length G) e.
+    | cl_typ : forall {T1 T2},
+        closedTy G T1 ->
+        closedTy G T2 ->
+        closedTy G (TTyp T1 T2)
 
-    Inductive wf_ty : cx -> ty -> Set :=
-    | wf_bot : forall {G},
-        wf_ty G TBot
+    | cl_sel : forall {x},
+        closed G x ->
+        closedTy G (TSel x)
 
-    | wf_top : forall {G},
-        wf_ty G TTop
+    | cl_pi : forall {T1 T2},
+        closedTy G T1 ->
+        closedTy (T1 :: G) T2 ->
+        closedTy G (TPi T1 T2).
 
-    | wf_typ : forall {G T1 T2},
+    Definition shift_aux (f : nat -> nat -> nat) (d c : nat) (x : var) : var := if ltb x c then x else f x d.
+    Definition shiftU := shift_aux add.
+    Definition shiftD := shift_aux sub.
+
+    Fixpoint shiftTy_aux (shift : nat -> nat -> var -> var) (d c : nat) (T : ty) : ty :=
+      match T with
+      | TSel x => TSel (shift d c x)
+      | TTyp T1 T2 => TTyp (shiftTy_aux shift d c T1) (shiftTy_aux shift d c T2)
+      | TPi T1 T2 => TPi (shiftTy_aux shift d c T1) (shiftTy_aux shift d (S c) T2)
+      | _ => T
+      end.
+    Definition shiftTyU := shiftTy_aux shiftU.
+    Definition shiftTyD := shiftTy_aux shiftD.
+
+    Fixpoint substTy (T : ty) (l : nat) (x : var) : ty :=
+      match T with
+      | TSel x' => if beq_nat x' l then TSel x else TSel x'
+      | TTyp T1 T2 => TTyp (substTy T1 l x) (substTy T2 l x)
+      | TPi T1 T2 => TPi (substTy T1 l x) (substTy T2 (S l) (shiftU 1 0 x))
+      | _ => T
+      end.
+    Definition appTy (T : ty) (x : var) : ty := shiftTyD 1 0 (substTy T 0 (shiftU 1 0 x)).
+
+    Inductive wf_ty (G : cx) : ty -> Set :=
+    | wf_bot : wf_ty G TBot
+
+    | wf_top : wf_ty G TTop
+
+    | wf_typ : forall {T1 T2},
         wf_ty G T1 ->
         wf_ty G T2 ->
         wf_ty G (TTyp T1 T2)
 
     (* Note that x has any type below. Restricting x : S ... T causes sel to be
        parametric in S and T. *)
-    | wf_sel : forall {G x T},
-        has_type G (tVar x) T ->
+    | wf_sel : forall {x},
+        closed G x ->
         wf_ty G (TSel x)
 
-    | wf_pi : forall {G T1 T2},
+    | wf_pi : forall {T1 T2},
         wf_ty G T1 ->
-        wf_ty (T1 :: G) (openTy G T2) ->
+        wf_ty (T1 :: G) T2 ->
         wf_ty G (TPi T1 T2)
 
-    with has_type : cx -> tm -> ty -> Set :=
-    | t_var : forall {G T1 x},
+    with has_type (G : cx) : tm -> ty -> Set :=
+    | t_var : forall {T1 x},
         wf_ty G T1 ->
-        indexr G x = Some T1 ->
-        has_type G (varF x) T1 (* Typing rule for varB? Not needed since we open T2?*)
+        get G x = Some T1 ->
+        has_type G x T1 (* Typing rule for varB? Not needed since we open T2?*)
 
-    | t_lam : forall {G T1 T2 e},
+    | t_lam : forall {T1 T2 e},
         wf_ty G T1 ->
-        has_type (T1 :: G) (openTm G e) (openTy G T2) ->
+        has_type (T1 :: G) e T2 ->
         has_type G (tLam T1 e) (TPi T1 T2)
 
-    | t_app : forall {G T1 T2 e e'},
+    | t_app : forall {T1 T2 e e'},
         has_type G e (TPi T1 T2) ->
         has_type G e' T1 ->
-        openTy G T2 = T2 -> (* If opening T2 does not change T2 i.e. T2 is independent of e' *)
+        closedTy G T2 ->
         has_type G (tApp e e') T2
 
-    | t_dapp : forall {G T1 T2 e x},
+    | t_dapp : forall {T1 T2 e x},
         has_type G e (TPi T1 T2) ->
         has_type G (tVar x) T1 ->
-        has_type G (tApp e (tVar x)) (openTyWith T2 x)
+        has_type G (tApp e (tVar x)) (appTy T2 x)
 
-    | t_typ : forall {G T},
+    | t_typ : forall {T},
         wf_ty G T ->
         has_type G (tTyp T) (TTyp T T)
 
-    | t_sub : forall {G T1 T2 e},
+    | t_sub : forall {T1 T2 e},
         has_type G e T1 ->
         subtype G T1 T2 ->
         has_type G e T2
 
-    with subtype : cx -> ty -> ty -> Set :=
-    | s_bot : forall {G T},
+    with subtype (G : cx) : ty -> ty -> Set :=
+    | s_bot : forall {T},
         wf_ty G T ->
         subtype G TBot T
 
-    | s_top : forall {G T},
+    | s_top : forall {T},
         wf_ty G T ->
         subtype G T TTop
 
-    | s_typ : forall {G T1 T2 T1' T2'},
+    | s_typ : forall {T1 T2 T1' T2'},
         subtype G T1' T1 ->
         subtype G T2 T2' ->
         subtype G (TTyp T1 T2) (TTyp T1' T2')
 
-    | s_sel1 : forall {G T1 T2 x},
+    | s_sel1 : forall {T1 T2 x},
         has_type G (tVar x) (TTyp T1 T2) ->
         subtype G T1 (TSel x)
 
-    | s_sel2 : forall {G T1 T2 x},
+    | s_sel2 : forall {T1 T2 x},
         has_type G (tVar x) (TTyp T1 T2) ->
         subtype G (TSel x) T2
 
-    | s_pi : forall {G T1 T2 T1' T2'},
+    | s_pi : forall {T1 T2 T1' T2'},
         subtype G T1' T1 ->
-        subtype (T1' :: G) (openTy G T2) (openTy G T2') ->
-        wf_ty (T1 :: G) (openTy G T2) ->
+        subtype (T1' :: G) T2 T2' ->
+        wf_ty (T1 :: G) T2 ->
         subtype G (TPi T1 T2) (TPi T1' T2')
 
-    | s_refl : forall {G T},
+    | s_refl : forall {T},
         wf_ty G T ->
         subtype G T T
 
-    | s_trans : forall {G T1 T2 T3},
+    | s_trans : forall {T1 T2 T3},
         subtype G T1 T2 ->
         subtype G T2 T3 ->
         subtype G T1 T3.
@@ -161,17 +189,66 @@ Module Lang.
        (*---------------*)
         wf_cx (T :: G).
 
+    Definition closed_implies_ht {G x} (clx : closed G x) : sigT (fun T => wf_ty G T -> has_type G (tVar x) T).
+      eapply existT. constructor. assumption. exact (projT2 clx).
+    Defined.
+
+    Fixpoint ht_implies_closed {G T x} (xT : has_type G (tVar x) T) : closed G x.
+      inversion xT; subst.
+      - eapply existT. eassumption.
+      - eapply ht_implies_closed. eassumption.
+    Defined.
+
+    Fixpoint strengthening_by_appTy {G T T' x} (wfT : wf_ty (T' :: G) T) (clX : closed G x) : wf_ty G (appTy T x).
+      remember (T' :: G) as T'G. induction wfT.
+      - constructor.
+      - constructor.
+      - constructor. apply IHwfT1. assumption. apply IHwfT2. assumption.
+        - 
+
+    Fixpoint ht_implies_wf {G T e} (eT : has_type G e T) : wf_ty G T
+    with st_implies_wf {G T T'} (ST : subtype G T T') : wf_ty G T * wf_ty G T'.
+      (* has_type G e T -> wf_ty G T *)
+      - induction eT.
+        + (* t_var *) assumption.
+        + (* t_lam *) constructor. assumption. eapply ht_implies_wf. eassumption.
+        + (* t_app *)
+        + (* t_dapp *)
+        + constructor. assumption. assumption.
+        + eapply st_implies_wf. apply s.
+      - induction ST.
+        + apply pair. constructor. assumption.
+        + apply pair. assumption. constructor.
+        + apply pair.
+          * constructor. exact (snd IHST1). exact (fst IHST2).
+          * constructor. exact (fst IHST1). exact (snd IHST2).
+        + apply pair.
+          * apply ht_implies_wf in h. inversion h. subst. assumption.
+          * constructor. eapply ht_implies_closed. eassumption.
+        + apply pair.
+          * constructor. eapply ht_implies_closed. eassumption.
+          * apply ht_implies_wf in h. inversion h. subst. assumption.
+        + apply pair.
+          * constructor. exact (snd IHST1). assumption.
+          * constructor. exact (fst IHST1). exact (snd IHST2).
+        + exact (w, w).
+        + apply pair. exact (fst IHST1). exact (snd IHST2).
+    Admitted.
+
+(*
     Lemma strengthen_by_opening : forall {G T0 T T' x},
         wf_ty (T0 :: G) (openTy G T) ->
         has_type G (tVar x) T' ->
         wf_ty G (openTyWith T x).
     Proof.
-      intros. induction T.
+      intros G T0 T. generalize dependent G. generalize dependent T0.
+      induction T; intros.
       - constructor.
       - constructor.
-      - unfold openTyWith. simpl. inversion H; subst. constructor; intuition.
-      - admit.
-    Admitted.
+      - inversion H. subst. clear H. constructor.
+        + eapply IHT1. eassumption. eassumption.
+        + eapply IHT2. eassumption. eassumption.
+      - inversion H. subst. Abort.
 
     Lemma strengthen_by_independence : forall {G T T'},
         wf_ty (T' :: G) (openTy G T) ->
@@ -181,50 +258,11 @@ Module Lang.
       intros. rewrite H0 in H. induction H.
       - constructor.
       - constructor.
-      - admit.
-    Admitted.
+      - Abort.
 
-    Corollary inversion_wf_pi_2 : forall {G T T'},
-        wf_ty G (TPi T T') ->
-        wf_ty (T :: G) (openTy G T').
-    Proof. intros. inversion H. assumption. Qed.
-(*
-    Lemma rename_by_subtyping {G T T1 T2}
-                             (wfT : wf_ty (T2 :: G) T)
-                             (ST : subtype G T1 T2) : wf_ty (T1 :: G) T.
-    Proof. Admitted.
+    Example problem : forall {G}, openTy G (TSel (varF (length G))) = TSel (varF (length G)).
+    reflexivity. Qed.
 *)
-    (* All well typed terms have well formed types. *)
-    Fixpoint has_type_implies_wf {G T e} (eT : has_type G e T) : wf_ty G T
-    with subtype_implies_wf {G T T'} (ST : subtype G T T') : wf_ty G T * wf_ty G T'.
-      -  (* has_type G e T -> wf_ty G T *)
-        induction eT.
-        + (* t_var *) assumption.
-        + (* t_lam *) constructor. assumption. eauto.
-        + (* t_app *) eapply strengthen_by_independence. apply inversion_wf_pi_2.
-          eauto. auto.
-        + (* t_dapp*) eapply strengthen_by_opening. apply inversion_wf_pi_2.
-          eauto. eauto.
-        + (* t_typ *) constructor. assumption. assumption.
-        + (* t_sub *) exact (snd (subtype_implies_wf _ _ _ s)).
-      - (* subtype G T T' -> wf_ty G T * wf_ty G T' *)
-        induction ST.
-        + (* s_bot *) apply pair. constructor. assumption.
-        + (* s_top *) apply pair. assumption. constructor.
-        + (* s_typ *) apply pair; constructor; intuition; intuition.
-        + (* s_sel1 *) apply pair.
-          * pose (has_type_implies_wf _ _ _ h) as H. inversion H. assumption.
-          * econstructor. exact h.
-        + (* s_sel2 *) apply pair.
-          * econstructor. exact h.
-          * pose (has_type_implies_wf _ _ _ h) as H. inversion H. assumption.
-        + (* s_pi *) apply pair.
-          * constructor. intuition. assumption.
-          * constructor. intuition. intuition.
-        + (* s_refl *) intuition.
-        + (* s_trans *) intuition.
-          Qed.
-
   End D.
 
   Module CC.
@@ -241,8 +279,6 @@ Module Lang.
     | tPair : expr -> expr -> expr
     | tFst : expr -> expr
     | tSnd : expr -> expr.
-
-    Coercion tVar : var >-> expr.
 
     Definition cx : Set := cx expr.
 
