@@ -29,11 +29,9 @@ Notation "G ~ T" := (cons T G) (at level 50) : var_scope.
 Bind Scope var_scope with var.
 Open Scope var_scope.
 
-Fixpoint lookup {ty} (G : list ty) (x : fVar) : option ty :=
-  match G with
-  | nil => None
-  | G' ~ A => if length G =? x then Some A else lookup G' x
-  end.
+Inductive lookup {ty} : list ty -> fVar -> ty -> Prop :=
+  | first : forall G T, lookup (G ~ T) (length G) T
+  | weaken : forall G T U x, lookup G x T -> lookup (G ~ U) x T.
 
 (***************************************************************************
  * System D<:>
@@ -145,7 +143,7 @@ Module D.
   with hasType : cx -> tm -> ty -> Prop :=
     | t_var : forall G x T, 
         G |-d -> 
-        lookup G x = Some T -> 
+        lookup G x T -> 
         G |-tm `x : T
 
     | t_lam : forall G t T U,
@@ -236,15 +234,24 @@ End D.
  * -------------------------
  * [X] Presyntax
  * [X] Opening
- * [ ] Substitution
- * [ ] Context formation
- * [ ] Typechecking 
- * [ ] Type equality
- * [ ] Term equality
- * [ ] Splicing
+ * [X] Substitution
+ * [X] Context formation
+ * [X] Typechecking 
+ * [X] Expression equality
+ * [X] Splicing
  * [ ] Evaluation
  * [ ] Optional: Locally closed predicate
- * - Required Lemmas (TBD) *)
+ * - Required Lemmas (TBD) 
+ * Can you express expresssion equality in terms of beta reduction? Charguer
+   does it here using locally nameless + cofinite quant, so we should be able
+   to do the same. 
+   https://github.com/charguer/formalmetacoq/blob/master/ln/CoC_Definitions.v
+   However, it's not clear to me that this system can naively be extended with
+   primite dependent tuples -- I'd have to prove that by hand. Pierce in 
+   ATAPL states that CC can be extended with these, but his formulation of CC
+   is weird, since he derives it by extending LF. I'm not very comfortable 
+   with this extension, but I'll add it for now.
+   TODO: Discuss this with Oliver and Tiark. *)
 
 Module CC.
 
@@ -258,7 +265,7 @@ Module CC.
     | tLam : expr -> expr -> expr
     | tApp : expr -> expr -> expr
     | TEx : expr -> expr -> expr
-    | tPair : expr -> expr -> expr
+    | tPair : expr -> expr -> expr -> expr
     | tFst : expr -> expr
     | tSnd : expr -> expr.
 
@@ -267,7 +274,7 @@ Module CC.
 
   Notation "\: T" := (tLam T) (at level 5) : cc_scope.
   Notation "t $" := (tApp t) (at level 4) : cc_scope.
-  Notation "t &" := (tPair t) (at level 4) : cc_scope.
+  Notation "t & u :[ T ]" := (tPair t u T) (at level 4) : cc_scope.
   Coercion TSort : sort >-> expr.
   Coercion tVar : var >-> expr.
 
@@ -284,7 +291,7 @@ Module CC.
     | \:T t => \:(e{i :-> x} T) (e{S i :-> x} t)
     | t $ u => (e{i :-> x} t) $ (e{i :-> x} u)
     | TEx T U => TEx (e{i :-> x} T) (e{S i :-> x} U)
-    | t & u => (e{i :-> x} t) & (e{i :-> x} u)
+    | t & u :[T] => (e{i :-> x} t) & (e{i :-> x} u) :[e{i :-> x} T]
     | tFst t => tFst (e{i :-> x} t)
     | tSnd t => tSnd (e{i :-> x} t)
     end
@@ -302,15 +309,19 @@ Module CC.
     | \:T t => \:(e[x :-> u] T) (e[x:-> u] t)
     | t $ t' => (e[x :-> u] t) $ (e[x :-> u] t')
     | TEx T U => TEx (e[x :-> u] T) (e[x :-> u] U)
-    | t & t' => (e[x :-> u] t) & (e[x :-> u] t')
+    | t & t' :[T] => (e[x :-> u] t) & (e[x :-> u] t') :[e[x :-> u] T]
     | tFst t => tFst (e[x :-> u] t) 
     | tSnd t => tSnd (e[x :-> u] t)
     end
     where "e[ x :-> u ]" := (subst x u) : cc_scope.
 
+  Notation "*[ x :-> u ] e" := (subst x u (e *^ x)) (at level 50).
+
   Reserved Notation "G |-cc" (no associativity, at level 90).
   Reserved Notation "G |-e e : T" (no associativity, at level 90,
                                    e at next level).
+  Reserved Notation "G |-q e == u : T" (no associativity, at level 90,
+                                          u at next level).
 
   (* Context formation *)
   Inductive wfCx : cx -> Prop :=
@@ -327,9 +338,17 @@ Module CC.
   with hasType : cx -> expr -> expr -> Prop :=
     | t_ax : forall G, G |-cc -> G |-e prop : type
 
+    (* PTS has weakening as an explicit rule. We can (probably?) prove this
+       rule from the rest. However, Charguer doesn't add this in his 
+       formulation, and Pierce doesn't mention it in ATAPL either. :( *)
+    | t_weaken : forall G e T U s,
+        G |-e e : T ->
+        G |-e U : TSort s ->
+        G ~ U |-e e : T
+
     | t_var : forall G x T,
         G |-cc ->
-        lookup G x = Some T ->
+        lookup G x T ->
         G |-e `x : T
 
     | t_all : forall G T U sT sU,
@@ -345,17 +364,18 @@ Module CC.
     | t_app : forall G T U t u,
         G |-e t : TAll T U ->
         G |-e u : T ->
-        G |-e t $ u : e[length G :-> u] (U *^ (length G))
+        G |-e t $ u : *[length G :-> u] U
 
     | t_ex : forall G T U sT sU,
         G |-e T : TSort sT ->
-        G ~ T |-e U  : TSort sU ->
+        G ~ T |-e U *^ (length G) : TSort sU ->
         G |-e TEx T U : TSort sU
 
     | t_pair : forall G T U s t u,
         G |-e TEx T U : TSort s ->
         G |-e t : T ->
-        G |-e u : e[length G :-> t] (U *^ (length G))
+        G |-e u : *[length G :-> t] U ->
+        G |-e t & u :[TEx T U] : TEx T U
 
     | t_fst : forall G T U e,
         G |-e e : TEx T U ->
@@ -363,15 +383,153 @@ Module CC.
 
     | t_snd : forall G T U e,
         G |-e e : TEx T U ->
-        G |-e tSnd e : e[length G :-> tFst e] (U *^ (length G))
-(*
+        G |-e tSnd e : *[length G :-> tFst e] U
+
     | t_conv : forall G t s T U,
         G |-e t : T ->
-        G |-eq T == U : TSort s ->
+        G |-q T == U : TSort s ->
         G |-e t : U
- *)
-    where "G |-e e : T" := (hasType G e T) : cc_scope.
+
+    where "G |-e e : T" := (hasType G e T) : cc_scope
   
+  with equal : cx -> expr -> expr -> expr -> Prop :=
+  (* Do I need kind equivalence? I can't show that type = type with these 
+     rules. But I don't need that equivalence rule with the t_conv rule. *)
+    | q_beta : forall G e u T U,
+        G ~ T |-e e *^ (length G) : U *^ (length G) ->
+        G |-e u : T ->
+        G |-q (\:T e) $ u == *[length G :-> u] e : *[length G :-> u] U
+
+    | q_eta : forall G e T U,
+        G |-e e : TAll T U ->
+        (* (length G) is not free in e -- not needed coz nameless? *)
+        G |-q \:T (e $ #0) == e : TAll T U
+
+    | q_refl : forall G e T, G |-e e : T -> G |-q e == e : T
+    | q_sym : forall G e u T, G |-q e == u : T -> G |-q u == e : T
+    | q_trans : forall G e u t T,
+        G |-q e == u : T ->
+        G |-q u == t : T ->
+        G |-q e == t : T
+
+    | q_all : forall G T U T' U' (s s' : sort),
+        G |-q T == T' : s ->
+        G ~ T |-q U *^ (length G) == U' *^ (length G) : s' ->
+        G |-q TAll T U == TAll T' U' : s'
+
+    | q_lam : forall G T e T' e' U (s : sort),
+        G |-q T == T' : s ->
+        G ~ T |-q e *^ (length G) == e' *^ (length G) : U ->
+        G |-q \:T e == \:T' e' : TAll T U
+
+    | q_app : forall G e u e' u' T U,
+        G |-q e == e' : TAll T U ->
+        G |-q u == u' : T ->
+        G |-q e $ u == e' $ u' : e[length G :-> u] (U *^ (length G))
+
+    | q_ex : forall G T U T' U' (s s' : sort),
+        G |-q T == T' : s ->
+        G ~ T |-q U *^ (length G) == U' *^ (length G) : s' ->
+        G |-q TEx T U == TEx T' U' : s'
+
+    | q_pair : forall G t T U,
+        G |-e t : TEx T U ->
+        G |-q (tFst t) & (tSnd t) :[TEx T U] == t : TEx T U
+
+    | q_proj1 : forall G t u T U (s : sort),
+        G |-e TEx T U : s ->
+        G |-e t : T ->
+        G |-e u : e[length G :-> t] (U *^ (length G)) ->
+        G |-q (tFst (t & u :[TEx T U])) == t : T
+
+    | q_proj2 : forall G t u T U (s : sort),
+        G |-e TEx T U : s ->
+        G |-e t : T ->
+        G |-e u : e[length G :-> t] (U *^ (length G)) ->
+        G |-q (tSnd (t & u :[TEx T U])) == u : T
+
+    where "G |-q e == u : T" := (equal G e u T).
+
+  Hint Constructors wfCx hasType equal : Core.
+
+  Reserved Notation "k +> e" (at level 45, right associativity).
+  Fixpoint splice (k : nat) (e : expr) : expr :=
+    match e with
+    | tVar `x => varF (if k <=? x then S x else x)
+    | TSort _ | tVar #_ => e
+    | TAll T U => TAll (k +> T) (k +> U)
+    | \:T t => \:(k +> T) (k +> t)
+    | t $ u => (k +> t) $ (k +> u)
+    | TEx T U => TEx (k +> T) (k +> U)
+    | t & u :[T] => (k +> t) & (k +> u) :[k +> T]
+    | tFst t => tFst (k +> t)
+    | tSnd t => tSnd (k +> t)
+    end
+    where "k +> e" := (splice k e) : cc_scope.
+
+  (* Properties of terms *)
+
+  (* If a term is well-typed under precontext G, then G is a context. *)
+  Theorem hasType_wfCx : forall G e T, G |-e e : T -> G |-cc.
+  Proof.
+    induction 1; try assumption.
+    econstructor; eassumption.
+  Qed.
+
+  Hint Resolve hasType_wfCx : core.
+
+  (*************************************************************************
+   * Shallow embedding of System D<:> 
+   * --------------------------------*)
+
+  Definition tId (T : expr) := \:T #0.
+
+  (* Presyntax *)
+  Definition TBot := TAll prop #0.
+  Definition TTop := TEx prop #0.
+  
+  Definition TTyp (T U : expr) := 
+    TEx prop (TEx (TAll T #1) (TAll #1 U)).
+
+  Definition TSel (x : var) := tFst x.
+
+  Definition tTyp (T : expr) := 
+    (T & 
+      (tId T & tId T :[TEx (TAll T T) (TAll T T)])
+    :[TEx prop (TEx (TAll #0 #1) (TAll #1 #2))]).
+
+  (* Type formation: Our shallow embedding lives in prop, so well formed types
+     are simply types that live in prop. *)
+  Definition wfTy G T := hasType G T prop.
+  Notation "G |-* T" := (wfTy G T) (at level 90) : cc_scope.
+
+  Lemma wf_bot : forall G, G |-cc -> G |-* TBot.
+  Proof.
+    repeat (constructor || assumption || econstructor).
+  Qed.
+
+  Lemma wf_top : forall G, G |-cc -> G |-* TTop.
+  Proof.
+    repeat (constructor || assumption || econstructor).
+  Qed.
+
+  Lemma wf_all : forall G T U,
+    G |-* T ->
+    G ~ T |-* U *^ (length G) ->
+    G |-* TAll T U.
+  Proof.
+    repeat (constructor || assumption || eassumption || econstructor).
+  Qed.
+
+  Lemma wf_typ : forall G T U,
+    G |-* T ->
+    G |-* U ->
+    G |-* TTyp T U.
+  Proof.
+    econstructor. constructor. eauto. 
+    
+
+End CC.
 
 (***************************************************************************
  * Translation
@@ -381,3 +539,10 @@ Module CC.
  * [ ] Contexts
  * [ ] Terms
  * [ ] Reduction preservation *)
+
+Open Scope d_scope.
+Open Scope cc_scope.
+
+Fixpoint d2ccTy (T : D.ty) : CC.expr :=
+  match T with
+  | 
