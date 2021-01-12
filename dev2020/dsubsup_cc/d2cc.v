@@ -1,4 +1,6 @@
+Require Import EqNat.
 Require Import List.
+Require Import Lia.
 Require Import PeanoNat.
 
 Import Notations.
@@ -25,13 +27,88 @@ Inductive var : Set :=
 Notation "# i" := (varB i) (at level 0) : var_scope.
 Notation "` x" := (varF x) (at level 0) : var_scope.
 Notation "G ~ T" := (cons T G) (at level 50) : var_scope.
+Notation "G +~ G'" := (G' ++ G) (at level 60) : var_scope.
 
 Bind Scope var_scope with var.
 Open Scope var_scope.
 
+(* Lookup -- de Bruijn levels *)
 Inductive lookup {ty} : list ty -> fVar -> ty -> Prop :=
   | first : forall G T, lookup (G ~ T) (length G) T
   | weaken : forall G T U x, lookup G x T -> lookup (G ~ U) x T.
+
+(* Lookup -- de Bruijn indices *)
+Inductive lookup' {ty} : list ty -> fVar -> ty -> Prop :=
+  | z : forall G T, lookup' (G ~ T) 0 T
+  | s : forall G T U x, lookup' G x T -> lookup' (G ~ U) (S x) T.
+
+(* We previously used indexr to get the pretype at de Bruijn level x from
+   a precontext. *)
+Fixpoint indexr {ty} (G : list ty) (x : fVar) : option ty :=
+  match G with
+  | G' ~ T => if x =? length G' then Some T else indexr G' x
+  | nil => None
+  end.
+
+(* To convince myself that my lookup is equivalent to indexr. *)
+Lemma lookup_indexr : forall ty G x (T : ty), 
+  lookup G x T <-> indexr G x = Some T.
+Proof.
+  split.
+  * induction 1.
+    - simpl. replace (length G =? length G) with true. reflexivity. 
+      rewrite <- beq_nat_refl. reflexivity.
+    - simpl. replace (x =? length G) with false. assumption. 
+      admit (* If x = length G, then IHlookup is false. *).
+  * induction G.
+    - discriminate.
+    - simpl. destruct (x =? length G) eqn:E.
+      + inversion 1. replace x with (length G). constructor. admit (*E*).
+      + constructor. eauto.
+Admitted.
+
+Lemma lookup_append_r : forall ty (G G' : list ty) x T,
+  lookup G x T -> lookup (G +~ G') x T.
+Proof.
+  induction G'.
+  - auto.
+  - simpl. constructor. auto.
+Qed.
+
+Lemma lookup'_drop_front : forall ty G (T U : ty) x,
+  lookup' G x T -> lookup' (nil ~ U +~ G) x T.
+Proof.
+  induction 1; constructor. assumption.
+Qed.
+
+(* If looking up de Bruijn level x in precontext G is valid, then 
+x < length G. *)
+Lemma lookup_lt : forall ty G x (T : ty), lookup G x T -> x < length G.
+Proof.
+  induction 1; simpl; lia.
+Qed.
+
+(* If x points to T in G, then x points to (f T) in (map f G). *)
+Lemma lookup_map : forall {ty ty'} (f : ty -> ty') G x T,
+  lookup G x T -> lookup (map f G) x (f T).
+Proof.
+  induction 1. 
+  - simpl. replace (length G) with (length (map f G)).
+    constructor. apply map_length. 
+  - simpl. constructor. assumption.
+Qed.
+
+Lemma length_elim_middle : forall ty G G' (T : ty), 
+  length (G ~ T +~ G') = S (length (G +~ G')).
+Proof.
+  induction G'.
+  - reflexivity.
+  - simpl. intros. rewrite IHG'. reflexivity.
+Qed.
+
+Lemma split_nat : forall m n : nat, n <= m -> ((m - n) + n)%nat = m.
+Proof. lia. Qed.
+  
 
 (***************************************************************************
  * System D<:>
@@ -175,8 +252,8 @@ Module D.
 
   (* Subtyping *)
   with subtype : cx -> ty -> ty -> Prop :=
-    | s_bot : forall G T, G |-d -> G |-s TBot <: T
-    | s_top : forall G T, G |-d -> G |-s T <: TTop
+    | s_bot : forall G T, G |-ty T -> G |-s TBot <: T
+    | s_top : forall G T, G |-ty T -> G |-s T <: TTop
 
     | s_all : forall G T U T' U',
         G |-s T' <: T ->
@@ -249,8 +326,9 @@ End D.
    However, it's not clear to me that this system can naively be extended with
    primite dependent tuples -- I'd have to prove that by hand. Pierce in 
    ATAPL states that CC can be extended with these, but his formulation of CC
-   is weird, since he derives it by extending LF. I'm not very comfortable 
-   with this extension, but I'll add it for now.
+   is weird, since he derives it by extending LF. 
+   However, these lecture notes show that it can be done.
+   http://www4.di.uminho.pt/~mjf/pub/PSVC-Lecture7.pdf
    TODO: Discuss this with Oliver and Tiark. *)
 
 Module CC.
@@ -264,7 +342,7 @@ Module CC.
     | TAll : expr -> expr -> expr
     | tLam : expr -> expr -> expr
     | tApp : expr -> expr -> expr
-    | TEx : expr -> expr -> expr
+    | TSig : expr -> expr -> expr
     | tPair : expr -> expr -> expr -> expr
     | tFst : expr -> expr
     | tSnd : expr -> expr.
@@ -283,45 +361,60 @@ Module CC.
 
   (* Opening *)
   Reserved Notation "e{ i :-> x }" (at level 50).
-  Fixpoint open (i : bVar) (x : fVar) (e : expr) : expr :=
+  Fixpoint open (i : bVar) (e' e : expr) : expr :=
     match e with
-    | tVar #j => if i =? j then `x else #j
+    | tVar #j => if i =? j then e' else #j
     | TSort _ | tVar `_ => e
-    | TAll T U => TAll (e{i :-> x} T) (e{S i :-> x} U)
-    | \:T t => \:(e{i :-> x} T) (e{S i :-> x} t)
-    | t $ u => (e{i :-> x} t) $ (e{i :-> x} u)
-    | TEx T U => TEx (e{i :-> x} T) (e{S i :-> x} U)
-    | t & u :[T] => (e{i :-> x} t) & (e{i :-> x} u) :[e{i :-> x} T]
-    | tFst t => tFst (e{i :-> x} t)
-    | tSnd t => tSnd (e{i :-> x} t)
+    | TAll T U => TAll (e{i :-> e'} T) (e{S i :-> e'} U)
+    | \:T t => \:(e{i :-> e'} T) (e{S i :-> e'} t)
+    | t $ u => (e{i :-> e'} t) $ (e{i :-> e'} u)
+    | TSig T U => TSig (e{i :-> e'} T) (e{S i :-> e'} U)
+    | t & u :[T] => (e{i :-> e'} t) & (e{i :-> e'} u) :[e{i :-> e'} T]
+    | tFst t => tFst (e{i :-> e'} t)
+    | tSnd t => tSnd (e{i :-> e'} t)
     end
-    where "e{ i :-> x }" := (open i x) : cc_scope.
+    where "e{ i :-> e' }" := (open i e') : cc_scope.
 
-  Notation "e *^ x" := (open 0 x e) (at level 50).
+  Notation "e *^ u" := (open 0 u e) (at level 50).
 
-  (* Substitution *)
-  Reserved Notation "e[ x :-> u ]" (at level 50).
-  Fixpoint subst (x : fVar) (u e : expr) : expr :=
-    match e with
-    | tVar `y => if x =? y then u else `y
-    | TSort _ | tVar #_ => e
-    | TAll T U => TAll (e[x :-> u] T) (e[x :-> u] U)
-    | \:T t => \:(e[x :-> u] T) (e[x:-> u] t)
-    | t $ t' => (e[x :-> u] t) $ (e[x :-> u] t')
-    | TEx T U => TEx (e[x :-> u] T) (e[x :-> u] U)
-    | t & t' :[T] => (e[x :-> u] t) & (e[x :-> u] t') :[e[x :-> u] T]
-    | tFst t => tFst (e[x :-> u] t) 
-    | tSnd t => tSnd (e[x :-> u] t)
-    end
-    where "e[ x :-> u ]" := (subst x u) : cc_scope.
-
-  Notation "*[ x :-> u ] e" := (subst x u (e *^ x)) (at level 50).
-
+  Reserved Notation "e ~~> u" (no associativity, at level 90).
+  Reserved Notation "e == u" (no associativity, at level 90).
   Reserved Notation "G |-cc" (no associativity, at level 90).
   Reserved Notation "G |-e e : T" (no associativity, at level 90,
                                    e at next level).
   Reserved Notation "G |-q e == u : T" (no associativity, at level 90,
                                           u at next level).
+
+  (* Full beta-pi reduction *)
+  Inductive reduce : expr -> expr -> Prop :=
+    | r_beta : forall T e u, (\:T e) $ u ~~> e *^ u
+    | r_pi1 : forall e u T, tFst (e & u :[T]) ~~> e
+    | r_pi2 : forall e u T, tSnd (e & u :[T]) ~~> u
+    | r_all1 : forall T U T', T ~~> T' -> TAll T U ~~> TAll T' U
+    | r_all2 : forall T U U', U ~~> U' -> TAll T U ~~> TAll T U'
+    | r_lam1 : forall T e T', T ~~> T' -> \:T e ~~> \:T' e
+    | r_lam2 : forall T e e', e ~~> e' -> \:T e ~~> \:T e'
+    | r_app1 : forall e u e', e ~~> e' -> e $ u ~~> e' $ u
+    | r_app2 : forall e u u', u ~~> u' -> e $ u ~~> e $ u'
+    | r_sig1 : forall T U T', T ~~> T' -> TSig T U ~~> TSig T' U
+    | r_sig2 : forall T U U', U ~~> U' -> TSig T U ~~> TSig T U'
+    (* The lecture notes linked above don't mention adding these 
+       substructural rules for pairs, but I think they're required, else
+       we can't reduce inside tuples. *)
+    | r_pair1 : forall t u T t', t ~~> t' -> (t & u :[T]) ~~> (t' & u :[T])
+    | r_pair2 : forall t u T u', u ~~> u' -> (t & u :[T]) ~~> (t & u' :[T])
+    | r_pair3 : forall t u T T', T ~~> T' -> (t & u :[T]) ~~> (t & u :[T'])
+    | r_fst : forall t t', t ~~> t' -> tFst t ~~> tFst t'
+    | r_snd : forall t t', t ~~> t' -> tSnd t ~~> tSnd t'
+    where "e ~~> u" := (reduce e u) : cc_scope.
+
+  (* Beta-pi equality *)
+  Inductive equals : expr -> expr -> Prop :=
+    | e_red : forall e u, e ~~> u -> e == u
+    | e_refl : forall e, e == e
+    | e_sym : forall e u, e == u -> u == e
+    | e_trans : forall e u t, e == u -> u == t -> e == t
+    where "e == u" := (equals e u) : cc_scope.
 
   (* Context formation *)
   Inductive wfCx : cx -> Prop :=
@@ -338,14 +431,6 @@ Module CC.
   with hasType : cx -> expr -> expr -> Prop :=
     | t_ax : forall G, G |-cc -> G |-e prop : type
 
-    (* PTS has weakening as an explicit rule. We can (probably?) prove this
-       rule from the rest. However, Charguer doesn't add this in his 
-       formulation, and Pierce doesn't mention it in ATAPL either. :( *)
-    | t_weaken : forall G e T U s,
-        G |-e e : T ->
-        G |-e U : TSort s ->
-        G ~ U |-e e : T
-
     | t_var : forall G x T,
         G |-cc ->
         lookup G x T ->
@@ -353,106 +438,69 @@ Module CC.
 
     | t_all : forall G T U sT sU,
         G |-e T : TSort sT ->
-        G ~ T |-e U *^ (length G) : TSort sU ->
+        G ~ T |-e U *^ varF (length G) : TSort sU ->
         G |-e TAll T U : TSort sU
 
     | t_lam : forall G T U e s,
         G |-e T : TSort s ->
-        G ~ T |-e e *^ (length G) : U *^ (length G) ->
+        G ~ T |-e e *^ varF (length G) : U *^ varF (length G) ->
         G |-e \:T e : TAll T U
 
     | t_app : forall G T U t u,
         G |-e t : TAll T U ->
         G |-e u : T ->
-        G |-e t $ u : *[length G :-> u] U
+        G |-e t $ u : U *^ u
 
-    | t_ex : forall G T U sT sU,
+    | t_sig : forall G T U sT sU,
         G |-e T : TSort sT ->
-        G ~ T |-e U *^ (length G) : TSort sU ->
-        G |-e TEx T U : TSort sU
+        G ~ T |-e U *^ varF (length G) : TSort sU ->
+        G |-e TSig T U : TSort sU
 
     | t_pair : forall G T U s t u,
-        G |-e TEx T U : TSort s ->
+        G |-e TSig T U : TSort s ->
         G |-e t : T ->
-        G |-e u : *[length G :-> t] U ->
-        G |-e t & u :[TEx T U] : TEx T U
+        G |-e u : U *^ t ->
+        G |-e t & u :[TSig T U] : TSig T U
 
     | t_fst : forall G T U e,
-        G |-e e : TEx T U ->
+        G |-e e : TSig T U ->
         G |-e tFst e : T
 
     | t_snd : forall G T U e,
-        G |-e e : TEx T U ->
-        G |-e tSnd e : *[length G :-> tFst e] U
+        G |-e e : TSig T U ->
+        G |-e tSnd e : U *^ (tFst e)
 
-    | t_conv : forall G t s T U,
+    | t_conv : forall G t T U,
         G |-e t : T ->
-        G |-q T == U : TSort s ->
+        T == U ->
         G |-e t : U
 
-    where "G |-e e : T" := (hasType G e T) : cc_scope
+    | t_weaken : forall G e T U,
+        G |-e e : T ->
+        G ~ U |-e e : T
+
+    where "G |-e e : T" := (hasType G e T) : cc_scope.
   
-  with equal : cx -> expr -> expr -> expr -> Prop :=
-  (* Do I need kind equivalence? I can't show that type = type with these 
-     rules. But I don't need that equivalence rule with the t_conv rule. *)
-    | q_beta : forall G e u T U,
-        G ~ T |-e e *^ (length G) : U *^ (length G) ->
-        G |-e u : T ->
-        G |-q (\:T e) $ u == *[length G :-> u] e : *[length G :-> u] U
+  Hint Constructors wfCx hasType equals : Core.
 
-    | q_eta : forall G e T U,
-        G |-e e : TAll T U ->
-        (* (length G) is not free in e -- not needed coz nameless? *)
-        G |-q \:T (e $ #0) == e : TAll T U
+  (* Substitution *)
+  Reserved Notation "e[ x :-> u ]" (at level 50).
+  Fixpoint subst (x : fVar) (u e : expr) : expr :=
+    match e with
+    | tVar `y => if x =? y then u else `y
+    | TSort _ | tVar #_ => e
+    | TAll T U => TAll (e[x :-> u] T) (e[x :-> u] U)
+    | \:T t => \:(e[x :-> u] T) (e[x:-> u] t)
+    | t $ t' => (e[x :-> u] t) $ (e[x :-> u] t')
+    | TSig T U => TSig (e[x :-> u] T) (e[x :-> u] U)
+    | t & t' :[T] => (e[x :-> u] t) & (e[x :-> u] t') :[e[x :-> u] T]
+    | tFst t => tFst (e[x :-> u] t) 
+    | tSnd t => tSnd (e[x :-> u] t)
+    end
+    where "e[ x :-> u ]" := (subst x u) : cc_scope.
 
-    | q_refl : forall G e T, G |-e e : T -> G |-q e == e : T
-    | q_sym : forall G e u T, G |-q e == u : T -> G |-q u == e : T
-    | q_trans : forall G e u t T,
-        G |-q e == u : T ->
-        G |-q u == t : T ->
-        G |-q e == t : T
-
-    | q_all : forall G T U T' U' (s s' : sort),
-        G |-q T == T' : s ->
-        G ~ T |-q U *^ (length G) == U' *^ (length G) : s' ->
-        G |-q TAll T U == TAll T' U' : s'
-
-    | q_lam : forall G T e T' e' U (s : sort),
-        G |-q T == T' : s ->
-        G ~ T |-q e *^ (length G) == e' *^ (length G) : U ->
-        G |-q \:T e == \:T' e' : TAll T U
-
-    | q_app : forall G e u e' u' T U,
-        G |-q e == e' : TAll T U ->
-        G |-q u == u' : T ->
-        G |-q e $ u == e' $ u' : e[length G :-> u] (U *^ (length G))
-
-    | q_ex : forall G T U T' U' (s s' : sort),
-        G |-q T == T' : s ->
-        G ~ T |-q U *^ (length G) == U' *^ (length G) : s' ->
-        G |-q TEx T U == TEx T' U' : s'
-
-    | q_pair : forall G t T U,
-        G |-e t : TEx T U ->
-        G |-q (tFst t) & (tSnd t) :[TEx T U] == t : TEx T U
-
-    | q_proj1 : forall G t u T U (s : sort),
-        G |-e TEx T U : s ->
-        G |-e t : T ->
-        G |-e u : e[length G :-> t] (U *^ (length G)) ->
-        G |-q (tFst (t & u :[TEx T U])) == t : T
-
-    | q_proj2 : forall G t u T U (s : sort),
-        G |-e TEx T U : s ->
-        G |-e t : T ->
-        G |-e u : e[length G :-> t] (U *^ (length G)) ->
-        G |-q (tSnd (t & u :[TEx T U])) == u : T
-
-    where "G |-q e == u : T" := (equal G e u T).
-
-  Hint Constructors wfCx hasType equal : Core.
-
-  Reserved Notation "k +> e" (at level 45, right associativity).
+  (* Splicing *)
+  Reserved Notation "k +>" (at level 45, right associativity).
   Fixpoint splice (k : nat) (e : expr) : expr :=
     match e with
     | tVar `x => varF (if k <=? x then S x else x)
@@ -460,20 +508,157 @@ Module CC.
     | TAll T U => TAll (k +> T) (k +> U)
     | \:T t => \:(k +> T) (k +> t)
     | t $ u => (k +> t) $ (k +> u)
-    | TEx T U => TEx (k +> T) (k +> U)
+    | TSig T U => TSig (k +> T) (k +> U)
     | t & u :[T] => (k +> t) & (k +> u) :[k +> T]
     | tFst t => tFst (k +> t)
     | tSnd t => tSnd (k +> t)
     end
-    where "k +> e" := (splice k e) : cc_scope.
+    where "k +>" := (splice k) : cc_scope.
 
-  (* Properties of terms *)
+  (* Unsplicing *)
+  Reserved Notation "k -<" (at level 45, right associativity).
+  Fixpoint unsplice (k : nat) (e : expr) : expr :=
+    match e with
+    | tVar `x => varF (if k <=? x then x - 1 else x)
+    | TSort _ | tVar #_ => e
+    | TAll T U => TAll (k -< T) (k -< U)
+    | \:T t => \:(k -< T) (k -< t)
+    | t $ u => (k -< t) $ (k -< u)
+    | TSig T U => TSig (k -< T) (k -< U)
+    | t & u :[T] => (k -< t) & (k -< u) :[k -< T]
+    | tFst t => tFst (k -< t)
+    | tSnd t => tSnd (k -< t)
+    end
+    where "k -<" := (unsplice k) : cc_scope.
+
+  (* Unsplicing is the inverse of splicing. *)
+  Lemma splice_unsplice : forall e k, k -< (k +> e) = e.
+  Proof.
+    induction e; simpl; intros; try (rewrite IHe1; rewrite IHe2); 
+    try rewrite IHe3; try rewrite IHe; try reflexivity.
+    - destruct v. reflexivity. destruct (k <=? f) eqn:E.
+      + simpl. replace (k <=? S f) with true (* since k <= f *).
+        assert (f - 0 = f). lia. rewrite H. reflexivity. 
+        assert (k <= f). apply Nat.leb_le. assumption.
+        assert (k <= S f). lia.
+        apply Nat.leb_le in H0. symmetry. assumption.
+      + simpl. rewrite E. reflexivity.
+  Qed.
+
+  (* Splicing distributes on opening. *)
+  Lemma splice_open : forall e t k i, 
+    k +> (e{i :-> t} e) = e{i :-> k +> t} (k +> e).
+  Proof.
+    induction e; simpl; intros; 
+    try (rewrite IHe1; rewrite IHe2; try rewrite IHe3); 
+    try rewrite IHe;
+    try reflexivity.
+    - destruct v. 
+      + simpl. destruct (i =? b) eqn:E; reflexivity.
+      + simpl. reflexivity.
+  Qed.
+
+  (* Properties of expressions *)
+
+  Lemma t_weaken : forall G e T U s,
+    G |-e e : T ->
+    G |-e U : TSort s ->
+    G ~ U |-e e : T. Admitted.
+
+  (* Any pretype in a context is a type. *)
+  Theorem wfCx_lookup : forall G,
+    G |-cc ->
+    forall T, In T G ->
+    exists s : sort, G |-e T : s.
+  Admitted.
+
+  Hint Resolve wfCx_lookup : core.
+
+  Lemma hasType_splice : forall G G' e T,
+    G' +~ G |-e e : T ->
+    forall U,
+    G' ~ U +~ map (length G' +>) G |-cc ->
+    G' ~ U +~ map (length G' +>) G |-e (length G' +> e) : (length G' +> T).
+  Proof.
+    (* Attempted induction on 1, nonsense IH2 in TAll case *)
+    intros ? ? ? ? ?. remember (G' +~ G) as G'G. induction H; subst.
+    - constructor. assumption.
+    - simpl. destruct (length G' <=? x) eqn:E.
+      + constructor. assumption. 
+        admit (* 
+            1. S x >= length (G' ~ U) -> S x = length (G' ~ U) + x' for some x'
+               TODO: Define split_nat.
+            2. Goal: lookup (map (length G' +>) G) x' (length G' +> T)
+               TODO: Prove that lookup (T +~ G) (S x) U -> lookup G x U
+            3. Goal: lookup G x' T
+               TODO: Prove lookup_map
+            H0: lookup G x' T
+        *).
+      + constructor. assumption.
+        admit (*
+            Goal: lookup (map (length G' +>) G' ~ U +~ map (length G' +>) G)
+                         x (length G' +> T)
+            Since x < length G',
+            Goal: lookup (map (length G' +>) G') x (length G' +> T)
+            Goal: lookup G' x T
+            H0: lookup G' x T
+        *).
+    - Abort (* That second induction hypothesis is nonsense. *).
+
+  Fixpoint hasType_splice G G' e T (H : G +~ G' |-e e : T)
+      : forall U, 
+        G ~ U +~ map (length G +>) G' |-cc -> 
+        G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
+  Proof.
+    remember (G +~ G') as GG'. 
+    assert (forall k (s : sort), TSort s = k +> s). reflexivity.
+    destruct H; subst.
+    - constructor. assumption.
+    - constructor. assumption. admit (* lookup_splice *).
+    - simpl. econstructor; erewrite H0. 
+      + apply hasType_splice; eassumption.
+      + (* Rewrite the expression to the form (length G +> (U *^ `x)) *)
+        rewrite length_elim_middle. 
+        assert (tVar (varF (S (length (G +~ map (length G +>) G')))) =
+                  length G +> (varF (length (G +~ map (length G +>) G')))).
+        { simpl. admit (* length G <= length (G +~ map (length G +>) G')*). }
+        rewrite H3. rewrite <- splice_open. 
+        (* Rewrite the context to the form (G1 ~ T +~ G2) *)
+        replace ((G ~ U0 +~ map (length G +>) G') ~ length G +> T) with
+          (G ~ U0 +~ map (length G +>) (G' ~ T)).
+        apply hasType_splice.
+        replace (G +~ G' ~ T) with ((G +~ G') ~ T). 
+        replace (length (G +~ map (length G +>) G')) with (length (G +~ G')).
+        assumption. admit (* map preserves length *). 
+        admit (* cons and append commute *). simpl. econstructor. assumption.
+        erewrite H0. apply hasType_splice. eassumption. assumption.
+        reflexivity.
+    - admit (* TODO: Should be same as TAll case *).
+    - admit (* TODO *).
+    - admit (* TODO: Should be same as TAll and tLam cases *).
+    - admit (* TODO *).
+    - admit (* TODO *).
+    - admit (* TODO *).
+  Abort (* I strongly suspect this proof will be rejected because Coq's 
+    primitive recursion scheme won't be able to tell that this definition is
+    indeed well-founded. I'd have to use well-founded recursion. But despite
+    reading Chlipala's book and Oliver's code, I still don't quite get it. ;_; 
+    It's probably worth my time to finish the proof anyway and watch it get
+    rejected, because I can probably reuse several parts of it when I rewrite
+    with well-founded recursion.
+  *).
+
+  Lemma hasType_splice : forall G G' e T,
+    G' +~ G |-e e : T ->
+    forall U,
+    G' ~ U +~ map (length G' +>) G |-cc ->
+    G' ~ U +~ map (length G' +>) G |-e (length G' +> e) : (length G' +> T).
+  Proof. admit. Admitted.
 
   (* If a term is well-typed under precontext G, then G is a context. *)
   Theorem hasType_wfCx : forall G e T, G |-e e : T -> G |-cc.
   Proof.
     induction 1; try assumption.
-    econstructor; eassumption.
   Qed.
 
   Hint Resolve hasType_wfCx : core.
@@ -486,23 +671,23 @@ Module CC.
 
   (* Presyntax *)
   Definition TBot := TAll prop #0.
-  Definition TTop := TEx prop #0.
+  Definition TTop := TSig prop #0.
   
   Definition TTyp (T U : expr) := 
-    TEx prop (TEx (TAll T #1) (TAll #1 U)).
+    TSig prop (TSig (TAll T #1) (TAll #1 U)).
 
   Definition TSel (x : var) := tFst x.
 
   Definition tTyp (T : expr) := 
     (T & 
-      (tId T & tId T :[TEx (TAll T T) (TAll T T)])
-    :[TEx prop (TEx (TAll #0 #1) (TAll #1 #2))]).
+      ((tId T) & (tId T) :[TSig (TAll T T) (TAll T T)])
+    :[TSig prop (TSig (TAll #0 #1) (TAll #1 #2))]).
 
-  (* Type formation: Our shallow embedding lives in prop, so well formed types
-     are simply types that live in prop. *)
   Definition wfTy G T := hasType G T prop.
   Notation "G |-* T" := (wfTy G T) (at level 90) : cc_scope.
 
+  (* Type formation: Our shallow embedding lives in prop, so well formed types
+     are simply types that live in prop. *)
   Lemma wf_bot : forall G, G |-cc -> G |-* TBot.
   Proof.
     repeat (constructor || assumption || econstructor).
@@ -515,7 +700,7 @@ Module CC.
 
   Lemma wf_all : forall G T U,
     G |-* T ->
-    G ~ T |-* U *^ (length G) ->
+    G ~ T |-* U *^ varF (length G) ->
     G |-* TAll T U.
   Proof.
     repeat (constructor || assumption || eassumption || econstructor).
@@ -526,9 +711,99 @@ Module CC.
     G |-* U ->
     G |-* TTyp T U.
   Proof.
-    econstructor. constructor. eauto. 
-    
+    intros.
+    assert (T *^ varF (length G) = T). admit (* TODO: From G |-* T *).
+    assert (G ~ TSort prop |-* T). admit (* TODO: Weakening on H *).
+    assert (forall i t, e{i :-> t} U = U). admit (* TODO: From G |-* T *).
+    assert (forall T1 T2, G ~ TSort prop ~ T1 ~ T2 |-* U). 
+    admit (* TODO: Weakening on H0. *).
+    assert (G ~ TSort prop |-* TAll T (varF (length G))).
+    { econstructor. eauto. simpl. repeat constructor. econstructor; eauto. }
+    econstructor.
+    - constructor. eauto.
+    - simpl. econstructor.
+      + rewrite H1. econstructor.
+        * eassumption.
+        * simpl. repeat constructor. econstructor; eauto.
+      + simpl. econstructor.
+        * repeat constructor. econstructor. eauto. rewrite H1. eassumption.
+        * simpl. repeat rewrite H3. apply H4.
+  Admitted.
 
+  Lemma wf_sel : forall G x T U,
+    G |-e tVar x : TTyp T U ->
+    G |-* TSel x.
+  Proof.
+    econstructor. eassumption.
+  Qed.
+
+  (* Typechecking *)
+  Lemma d_app' : forall G t u T U,
+    G |-e t : TAll T U ->
+    G |-e u : T ->
+    G |-* U ->
+    G |-e t $ u : U.
+  Proof.
+    econstructor.
+    - econstructor; eassumption.
+    - assert (U *^ u = U). admit (* TODO: From G |-* U *).
+      rewrite H2. apply e_refl.
+  Admitted.
+
+  Lemma d_dapp : forall G t x T U,
+    G |-e t : TAll T U ->
+    G |-e `x : T ->
+    G |-e t $ `x : U *^ `x.
+  Proof.
+    econstructor; eassumption.
+  Qed.
+
+  Lemma d_typ : forall G T,
+    G |-* T ->
+    G |-e tTyp T : TTyp T T.
+  Proof.
+    econstructor. econstructor.
+    assert (G ~ TSort prop |-cc). { econstructor. eauto. constructor. eauto. }
+    assert (G ~ TSort prop |-* ` (length G)). 
+    { repeat constructor. assumption. }
+    assert (forall T, 
+      G ~ TSort prop |-* T -> G ~ TSort prop ~ T |-* ` (length G)).
+    { repeat constructor. econstructor; eassumption. }
+    assert (G ~ TSort prop |-* TAll ` (length G) ` (length G)).
+    { econstructor. eassumption. simpl. apply H2. assumption. }
+    assert (forall T,
+      G ~ TSort prop |-* T ->
+      G ~ TSort prop ~ T |-* TAll ` (length G) ` (length G)).
+    { econstructor. apply H2. assumption. simpl. repeat constructor.
+      econstructor. econstructor. assumption. eassumption. apply H2. 
+      assumption. }
+    econstructor. constructor. eauto. simpl. econstructor. eassumption.
+    simpl. apply H4. assumption. assumption. simpl. eapply t_pair.
+    econstructor. econstructor. eassumption. 
+    assert (T *^ ` (length G) = T). admit (*TODO: H*). rewrite H0.
+    admit (* TODO: weaken H *). e
+
+  Hint Resolve wf_bot wf_top wf_all wf_typ wf_sel t_app' t_dapp t_typ : core.
+
+  (* Subtyping *)
+  Definition subtype G T U := exists e, G |-e e : TAll T U.
+  Notation "G |-s' T <: U" := (subtype G T U) (no associativity, at level 90,
+                                               T at next level).
+
+  Lemma s_bot : forall G T, G |-* T -> G |-s' TBot <: T.
+  Proof.
+    intros. exists (\:TBot (#0 $ T)). econstructor. apply wf_bot. eauto.
+    simpl. econstructor. econstructor. constructor. econstructor. eauto.
+    econstructor. constructor. eauto. simpl. econstructor. econstructor.
+    eauto. constructor. eauto. constructor. constructor. 
+    admit (* Weaken H *). simpl. apply e_refl.
+  Admitted.
+
+  Lemma s_top : forall G T, G |-* T -> G |-s' T <: TTop.
+  Proof.
+    intros. exists (\:T (T & #0 :[TTop])). econstructor. eassumption.
+    simpl.
+ 
 End CC.
 
 (***************************************************************************
