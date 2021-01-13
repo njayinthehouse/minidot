@@ -618,6 +618,7 @@ Module CC.
   Qed.
 
   (* Valid renamings *)
+  (* !!! *)
   Lemma t_ren : forall G e T,
     G |-e e : T ->
     forall G' G1 T1 G2 T2 G3 r,
@@ -674,6 +675,7 @@ Module CC.
   Admitted.
 
   (* Any typing judgment under context G is valid under context G ~ T. *)
+  (* !!! *)
   Lemma t_weaken : forall G e T,
     G |-e e : T ->
     forall U s, 
@@ -706,7 +708,7 @@ Module CC.
       power, because we use renaming to prove that the codomain of TAll is
       well-formed. However, this looks like a potential candidate for well-
       founded recursion -- renaming doesn't grow the term. 
-  *)
+  *).
         
 
   (* Any pretype in a context is a type. *)
@@ -749,7 +751,8 @@ Module CC.
         *).
     - Abort (* That second induction hypothesis is nonsense. *).
 
-  Fixpoint hasType_splice G G' e T (H : G +~ G' |-e e : T)
+  Program Fixpoint hasType_splice G G' e T (H : G +~ G' |-e e : T)
+      {measure (esize_flat e)}
       : forall U, 
         G ~ U +~ map (length G +>) G' |-cc -> 
         G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
@@ -791,6 +794,66 @@ Module CC.
     opening U with a variable makes it less than TAll T U would work.
   *).
 
+  (* This time, I'mma try using the Fix combinator. *)
+  Reserved Notation "e e<= u" (at level 90, no associativity).
+  Inductive expr_lt : expr -> expr -> Prop :=
+    | lt_sort : forall T s, TSort s e<= T
+    | lt_var : forall T x, tVar x e<= T
+    | lt_all1 : forall T U, T e<= TAll T U
+    | lt_all2 : forall T U, U e<= TAll T U
+    | lt_lam1 : forall T e, T e<= \:T e
+    | lt_lam2 : forall T e, e e<= \:T e
+    | lt_app1 : forall e u, e e<= e $ u
+    | lt_app2 : forall e u, u e<= e $ u
+    | lt_sig1 : forall T U, T e<= TSig T U
+    | lt_sig2 : forall T U, U e<= TSig T U
+    | lt_pair1 : forall t u T, t e<= (t & u :[T])
+    | lt_pair2 : forall t u T, u e<= (t & u :[T])
+    | lt_pair3 : forall t u T, T e<= (t & u :[T])
+    | lt_fst : forall t, t e<= tFst t
+    | lt_snd : forall t, t e<= tSnd t
+    | lt_open : forall e u i x, e e<= u -> e{i :-> tVar x} e e<= u
+    where "e e<= u" := (expr_lt e u) : cc_scope.
+
+  (* A more intuitive measure *)
+  Fixpoint esize_flat (e : expr) : nat :=
+    match e with
+    | TSort _ | tVar _ => 0
+    | TAll T U | \:T U | T $ U | TSig T U => S (esize_flat T + esize_flat U)
+    | t & u :[T] => S (esize_flat t + esize_flat u + esize_flat T)
+    | tFst t | tSnd t => S (esize_flat t)
+    end.
+
+  (* Opening with a variable preserves size *)
+  Lemma open_var_size : forall e x i,
+    esize_flat e = esize_flat (e{i :-> tVar x} e).
+  Proof.
+    induction e; intros; simpl; eauto.
+    destruct v; try destruct (i =? b); auto.
+  Qed.
+
+  Lemma wf'_expr_lt : forall n e, esize_flat e <= n -> Acc expr_lt e.
+  Proof.
+    induction n.
+    - destruct e; intros; constructor; intros; simpl in *; inversion H0; 
+      subst; try lia. constructor. admit (* TODO:% How do I proceed? :P *).
+  Admitted.
+
+  Theorem wf_expr_lt : well_founded expr_lt. Admitted.
+
+  Print Fix.
+
+  Definition hasType_splice {G G' e T} 
+    (H1 : G' +~ G |-e e : T)
+    {U} (H2 : G' ~ U +~ map (length G' +>) G |-cc) :
+    G' ~ U +~ map (length G' +>) G |-e (length G' +> e) : (length G' +> T).
+  refine (
+  Fix wf_expr_lt 
+  (fun _ => 
+    G' ~ U +~ map (length G' +>) G |-e (length G' +> e) : (length G' +> T))
+  (fun ()))
+
+
   Lemma hasType_splice : forall G G' e T,
     G' +~ G |-e e : T ->
     forall U,
@@ -807,7 +870,7 @@ Module CC.
   Hint Resolve hasType_wfCx : core.
 
   (*************************************************************************
-   * Shallow embedding of System D<:> 
+   * Embedding of System D<:> 
    * --------------------------------*)
 
   Definition tId (T : expr) := \:T #0.
