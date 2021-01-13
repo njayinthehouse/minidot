@@ -75,6 +75,24 @@ Proof.
   - simpl. constructor. auto.
 Qed.
 
+Lemma lookup_fail : forall ty (G : list ty) x T,
+  x >= length G -> ~ (lookup G x T).
+Proof.
+  induction G; simpl; inversion 2; subst.
+  + lia.
+  + generalize H5. apply IHG. lia.
+Qed.
+
+Lemma lookup_drop_r : forall ty (G G' : list ty) T T',
+  lookup (G ~ T +~ G') (length G) T' -> T = T'.
+Proof.
+  induction G'; simpl; inversion 1; subst.
+  - reflexivity.
+  - apply lookup_fail in H4. contradiction. lia.
+  - rewrite app_length in H3. simpl in H3. lia.
+  - apply IHG'. assumption.
+Qed.
+
 Lemma lookup'_drop_front : forall ty G (T U : ty) x,
   lookup' G x T -> lookup' (nil ~ U +~ G) x T.
 Proof.
@@ -105,6 +123,18 @@ Proof.
   - reflexivity.
   - simpl. intros. rewrite IHG'. reflexivity.
 Qed.
+
+Lemma lookup_not_x : forall ty G G' x (T T' U : ty),
+  lookup (G ~ T +~ G') x U ->
+  x <> length G ->
+  lookup (G ~ T' +~ G') x U.
+Proof.
+  intros. destruct (x ?= length G) eqn:E.
+  - assert (x = length G). admit (*E*). contradiction.
+  - admit (* TODO: Case when x is in G *).
+  - admit (* TODO: Case when x is in G' *).
+Admitted.
+
 
 Lemma split_nat : forall m n : nat, n <= m -> ((m - n) + n)%nat = m.
 Proof. lia. Qed.
@@ -474,11 +504,11 @@ Module CC.
         G |-e t : T ->
         T == U ->
         G |-e t : U
-
+(*
     | t_weaken : forall G e T U,
         G |-e e : T ->
         G ~ U |-e e : T
-
+ *)
     where "G |-e e : T" := (hasType G e T) : cc_scope.
   
   Hint Constructors wfCx hasType equals : Core.
@@ -531,6 +561,22 @@ Module CC.
     end
     where "k -<" := (unsplice k) : cc_scope.
 
+  (* Renaming *)
+  Reserved Notation "x <~> y" (at level 45, right associativity).
+  Fixpoint rename (x y : fVar) (e : expr) : expr :=
+    match e with
+    | tVar `w => if x =? w then `y else if y =? w then `x else `w
+    | TSort _ | tVar #_ => e
+    | TAll T U => TAll ((x <~> y) T) ((x <~> y) U)
+    | \:T t => \:((x <~> y) T) ((x <~> y) t)
+    | t $ u => ((x <~> y) t) $ ((x <~> y) u)
+    | TSig T U => TSig ((x <~> y) T) ((x <~> y) U)
+    | t & u :[T] => ((x <~> y) t) & ((x <~> y) u) :[(x <~> y) T]
+    | tFst t => tFst ((x <~> y) t)
+    | tSnd t => tSnd ((x <~> y) t)
+    end
+    where "x <~> y" := (rename x y) : cc_scope.
+
   (* Unsplicing is the inverse of splicing. *)
   Lemma splice_unsplice : forall e k, k -< (k +> e) = e.
   Proof.
@@ -553,17 +599,115 @@ Module CC.
     try (rewrite IHe1; rewrite IHe2; try rewrite IHe3); 
     try rewrite IHe;
     try reflexivity.
-    - destruct v. 
-      + simpl. destruct (i =? b) eqn:E; reflexivity.
-      + simpl. reflexivity.
+    - destruct v; simpl. 
+      + destruct (i =? b) eqn:E; reflexivity.
+      + reflexivity.
   Qed.
 
-  (* Properties of expressions *)
+  (* Renaming distributes on opening. *)
+  Lemma rename_open : forall e t x y i,
+    (x <~> y) (e{i :-> t} e) = e{i :-> (x <~> y) t} ((x <~> y) e).
+  Proof.
+    induction e; simpl; intros;
+    try (rewrite IHe1; rewrite IHe2; try rewrite IHe3);
+    try rewrite IHe;
+    try reflexivity.
+    - destruct v; simpl.
+      + destruct (i =? b); reflexivity.
+      + destruct (x =? f), (y =? f); reflexivity.
+  Qed.
 
-  Lemma t_weaken : forall G e T U s,
+  (* Valid renamings *)
+  Lemma t_ren : forall G e T,
     G |-e e : T ->
+    forall G' G1 T1 G2 T2 G3 r,
+    G = G1 ~ T1 +~ G2 ~ T2 +~ G3 ->
+    r = length G1 <~> length (G1 ~ T1 +~ G2) ->
+    G' = map r (G1 ~ T2 +~ G2 ~ T1 +~ G3) ->
+    G' |-cc ->
+    G' |-e r e : r T.
+  Proof.
+    induction 1; intros G' G1 T1 G2 T2 G3 r Geq req G'eq H'.
+    - rewrite req. constructor. assumption.
+    - rewrite req. simpl. destruct (length G1 =? x) eqn:E.
+      + constructor. assumption. rewrite G'eq. rewrite <- req. 
+        apply lookup_map. 
+        assert (length (G1 ~ T1 +~ G2) = length (G1 ~ T2 +~ G2)).
+        { repeat rewrite length_elim_middle. reflexivity. }
+        rewrite H1. simpl. 
+        assert (length G1 = x). { apply beq_nat_true. assumption. }
+        assert (T1 = T).
+        { eapply lookup_drop_r. rewrite Geq in H0. rewrite <- H2 in H0.
+          rewrite app_assoc in H0. eassumption. }
+        rewrite H3. apply lookup_append_r. constructor.
+      + destruct (length (G1 ~ T1 +~ G2) =? x) eqn:E'.
+        * constructor. assumption. rewrite G'eq. rewrite <- req.
+          apply lookup_map. 
+          assert (length (G1 ~ T1 +~ G2) = x). 
+          { apply beq_nat_true. assumption. }
+          assert (T2 = T).
+          { eapply lookup_drop_r. rewrite Geq in H0. 
+            rewrite <- app_comm_cons in H0. rewrite <- H1 in H0.
+          eassumption. }
+          rewrite <- H2. rewrite app_assoc. apply lookup_append_r. constructor.
+        * admit (* TODO: Use lookup_not_x *).
+    - rewrite req. simpl. rewrite <- req.
+      assert (G' |-e r T : sT).
+      { replace (TSort sT) with (r sT). eapply IHhasType1; eassumption.
+        rewrite req. reflexivity. }
+      econstructor. 
+      + eassumption. 
+      + replace (tVar (` (length G'))) with (r (` (length G))).
+        rewrite req. rewrite <- rename_open. 
+        replace (TSort sU) with (r sU). rewrite <- req.
+        eapply IHhasType2 with (G1 := G1) (G2 := G2) (G3 := G3 ~ T).
+        rewrite Geq. reflexivity. assumption. rewrite G'eq. reflexivity.
+        econstructor; eassumption. rewrite req. reflexivity. rewrite req.
+        admit (* length G not in {length G1, length G1 ~ T1 +~ G2} *).
+    - admit (* TODO: Similar to TAll case *).
+    - admit (* TODO *).
+    - admit (* TODO: Similar to TAll case *).
+    - admit (* TODO *).
+    - admit (* TODO *).
+    - admit (* TODO *).
+    - admit (* TODO *).
+  Admitted.
+
+  (* Any typing judgment under context G is valid under context G ~ T. *)
+  Lemma t_weaken : forall G e T,
+    G |-e e : T ->
+    forall U s, 
     G |-e U : TSort s ->
-    G ~ U |-e e : T. Admitted.
+    G ~ U |-e e : T. 
+  Proof.
+    induction 1.
+    - constructor. econstructor; eassumption.
+    - constructor. econstructor; eassumption. constructor. assumption.
+    - econstructor.
+      + eapply IHhasType1. eassumption.
+      + remember (length G <~> length (G ~ U)) as r.
+        assert (r U = U).
+        { admit (* 
+              U is the body of the TAll, which is well formed under G.
+              Thus, it is not locally closed, but it does not contain
+              any free variables that are not in G.
+          *). }
+        assert (U *^ ` (length (G ~ U0)) = r (U *^ ` (length G))).
+        { rewrite Heqr. rewrite rename_open. simpl. rewrite <- beq_nat_refl.
+          simpl in Heqr. rewrite <- Heqr. rewrite H2. reflexivity. }
+        rewrite H3. 
+        replace (TSort sU) with (r sU).
+        apply t_ren with (G := G ~ T ~ U0) (G' := G ~ U0 ~ T)
+          (G1 := G) (T1 := T) (G2 := nil) (T2 := U0) (G3 := nil).
+        eapply IHhasType2.
+  Abort (* 
+      We're stuck trying to prove G ~ T |-e U0 : s0. We have G |-e U0 : s0,
+      but no suitable IH. We likely cannot use Fixpoint to give us more 
+      power, because we use renaming to prove that the codomain of TAll is
+      well-formed. However, this looks like a potential candidate for well-
+      founded recursion -- renaming doesn't grow the term. 
+  *)
+        
 
   (* Any pretype in a context is a type. *)
   Theorem wfCx_lookup : forall G,
@@ -641,11 +785,10 @@ Module CC.
     - admit (* TODO *).
   Abort (* I strongly suspect this proof will be rejected because Coq's 
     primitive recursion scheme won't be able to tell that this definition is
-    indeed well-founded. I'd have to use well-founded recursion. But despite
-    reading Chlipala's book and Oliver's code, I still don't quite get it. ;_; 
-    It's probably worth my time to finish the proof anyway and watch it get
-    rejected, because I can probably reuse several parts of it when I rewrite
-    with well-founded recursion.
+    indeed well-founded. I'd have to use well-founded recursion. But I'm not
+    clear what the well-founded relation should be here -- we have to prove
+    that U *^ (length G) < TAll T U. I suppose a relation which says that
+    opening U with a variable makes it less than TAll T U would work.
   *).
 
   Lemma hasType_splice : forall G G' e T,
