@@ -1,4 +1,5 @@
 Require Import EqNat.
+Require Import Equality.
 Require Import List.
 Require Import Lia.
 Require Import PeanoNat.
@@ -416,6 +417,7 @@ Module CC.
                                           u at next level).
 
   (* Full beta-pi reduction *)
+  (* TODO: Do we need eta equality? *)
   Inductive reduce : expr -> expr -> Prop :=
     | r_beta : forall T e u, (\:T e) $ u ~~> e *^ u
     | r_pi1 : forall e u T, tFst (e & u :[T]) ~~> e
@@ -750,9 +752,8 @@ Module CC.
             H0: lookup G' x T
         *).
     - Abort (* That second induction hypothesis is nonsense. *).
-
-  Program Fixpoint hasType_splice G G' e T (H : G +~ G' |-e e : T)
-      {measure (esize_flat e)}
+  (* forall n, esize_flat e <= n, lemma <<- guard the proof*)
+  Fixpoint hasType_splice G G' e T (H : G +~ G' |-e e : T)
       : forall U, 
         G ~ U +~ map (length G +>) G' |-cc -> 
         G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
@@ -835,14 +836,14 @@ Module CC.
   Lemma wf'_expr_lt : forall n e, esize_flat e <= n -> Acc expr_lt e.
   Proof.
     induction n.
-    - destruct e; intros; constructor; intros; simpl in *; inversion H0; 
-      subst; try lia. constructor. admit (* TODO:% How do I proceed? :P *).
+    - destruct e; intros. constructor; intros; simpl in *; inversion H0;
+      subst; try lia. Print Acc. constructor.  admit (* TODO:% How do I proceed? :P *).
   Admitted.
 
   Theorem wf_expr_lt : well_founded expr_lt. Admitted.
 
   Print Fix.
-
+  (*
   Definition hasType_splice {G G' e T} 
     (H1 : G' +~ G |-e e : T)
     {U} (H2 : G' ~ U +~ map (length G' +>) G |-cc) :
@@ -852,7 +853,7 @@ Module CC.
   (fun _ => 
     G' ~ U +~ map (length G' +>) G |-e (length G' +> e) : (length G' +> T))
   (fun ()))
-
+   *)
 
   Lemma hasType_splice : forall G G' e T,
     G' +~ G |-e e : T ->
@@ -987,9 +988,8 @@ Module CC.
     simpl. apply H4. assumption. assumption. simpl. eapply t_pair.
     econstructor. econstructor. eassumption. 
     assert (T *^ ` (length G) = T). admit (*TODO: H*). rewrite H0.
-    admit (* TODO: weaken H *). e
-
-  Hint Resolve wf_bot wf_top wf_all wf_typ wf_sel t_app' t_dapp t_typ : core.
+    admit (* TODO: weaken H *).
+  Admitted.
 
   (* Subtyping *)
   Definition subtype G T U := exists e, G |-e e : TAll T U.
@@ -1009,6 +1009,9 @@ Module CC.
   Proof.
     intros. exists (\:T (T & #0 :[TTop])). econstructor. eassumption.
     simpl.
+  Admitted.
+
+  (* TODO: Other subtyping rules. *)
  
 End CC.
 
@@ -1022,8 +1025,4 @@ End CC.
  * [ ] Reduction preservation *)
 
 Open Scope d_scope.
-Open Scope cc_scope.
-
-Fixpoint d2ccTy (T : D.ty) : CC.expr :=
-  match T with
-  | 
+Open Scope cc_scope.Z
