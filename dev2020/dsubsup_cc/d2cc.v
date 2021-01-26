@@ -35,70 +35,11 @@ Open Scope var_scope.
 
 (* Lookup -- de Bruijn levels *)
 Inductive lookup {ty} : list ty -> fVar -> ty -> Prop :=
-  | first : forall G T, lookup (G ~ T) (length G) T
-  | weaken : forall G T U x, lookup G x T -> lookup (G ~ U) x T.
+  | last : forall G T, lookup (G ~ T) (length G) T
+  | prev : forall G T U x, lookup G x T -> lookup (G ~ U) x T.
 
-(* Lookup -- de Bruijn indices *)
-Inductive lookup' {ty} : list ty -> fVar -> ty -> Prop :=
-  | z : forall G T, lookup' (G ~ T) 0 T
-  | s : forall G T U x, lookup' G x T -> lookup' (G ~ U) (S x) T.
-
-(* We previously used indexr to get the pretype at de Bruijn level x from
-   a precontext. *)
-Fixpoint indexr {ty} (G : list ty) (x : fVar) : option ty :=
-  match G with
-  | G' ~ T => if x =? length G' then Some T else indexr G' x
-  | nil => None
-  end.
-
-(* To convince myself that my lookup is equivalent to indexr. *)
-Lemma lookup_indexr : forall ty G x (T : ty), 
-  lookup G x T <-> indexr G x = Some T.
-Proof.
-  split.
-  * induction 1.
-    - simpl. replace (length G =? length G) with true. reflexivity. 
-      rewrite <- beq_nat_refl. reflexivity.
-    - simpl. replace (x =? length G) with false. assumption. 
-      admit (* If x = length G, then IHlookup is false. *).
-  * induction G.
-    - discriminate.
-    - simpl. destruct (x =? length G) eqn:E.
-      + inversion 1. replace x with (length G). constructor. admit (*E*).
-      + constructor. eauto.
-Admitted.
-
-Lemma lookup_append_r : forall ty (G G' : list ty) x T,
-  lookup G x T -> lookup (G +~ G') x T.
-Proof.
-  induction G'.
-  - auto.
-  - simpl. constructor. auto.
-Qed.
-
-Lemma lookup_fail : forall ty (G : list ty) x T,
-  x >= length G -> ~ (lookup G x T).
-Proof.
-  induction G; simpl; inversion 2; subst.
-  + lia.
-  + generalize H5. apply IHG. lia.
-Qed.
-
-Lemma lookup_drop_r : forall ty (G G' : list ty) T T',
-  lookup (G ~ T +~ G') (length G) T' -> T = T'.
-Proof.
-  induction G'; simpl; inversion 1; subst.
-  - reflexivity.
-  - apply lookup_fail in H4. contradiction. lia.
-  - rewrite app_length in H3. simpl in H3. lia.
-  - apply IHG'. assumption.
-Qed.
-
-Lemma lookup'_drop_front : forall ty G (T U : ty) x,
-  lookup' G x T -> lookup' (nil ~ U +~ G) x T.
-Proof.
-  induction 1; constructor. assumption.
-Qed.
+(****************************************************************************
+ * Lemmas about lookup *)
 
 (* If looking up de Bruijn level x in precontext G is valid, then 
 x < length G. *)
@@ -117,6 +58,44 @@ Proof.
   - simpl. constructor. assumption.
 Qed.
 
+Lemma lookup_fail : forall ty G x (T : ty), 
+  x >= length G -> ~ (lookup G x T).
+Proof.
+  unfold not. induction G.
+  - inversion 2.
+  - inversion 2; subst; simpl in H.
+    + lia.
+    + destruct (x =? length G) eqn:E.
+      * apply beq_nat_true in E. lia.
+      * apply beq_nat_false in E. eapply IHG with (x := x). lia. eassumption.
+Qed.
+
+Lemma lookup_drop_front : forall ty G G' x (T : ty),
+  lookup G' x T <-> lookup (G +~ G') (x + length G)%nat T.
+Proof.
+  split.
+
+  * induction G'.
+    - inversion 1.
+    - simpl. intros. destruct (x =? length G') eqn:E.
+      + apply beq_nat_true in E. rewrite E. 
+        replace (length G + length G')%nat with (length G' + length G)%nat.
+        rewrite <- app_length.
+        inversion H; subst.
+        -- constructor.
+        -- apply lookup_fail in H4. contradiction. lia.
+        -- lia.
+      + constructor. apply IHG'. inversion H; subst.
+        -- rewrite <- beq_nat_refl in E. discriminate.
+        -- assumption.
+
+  * induction G.
+    - rewrite app_nil_r. assert (x + 0 = x)%nat. lia. simpl. rewrite H. auto.
+    - simpl. (* Needed for t_thin. *)
+Qed.
+
+
+
 Lemma length_elim_middle : forall ty G G' (T : ty), 
   length (G ~ T +~ G') = S (length (G +~ G')).
 Proof.
@@ -125,20 +104,7 @@ Proof.
   - simpl. intros. rewrite IHG'. reflexivity.
 Qed.
 
-Lemma lookup_change : forall ty G' G x (T U : ty), 
-  lookup (G ~ T +~ G') x U ->
-  x <> length G ->
-  forall T',
-  lookup (G ~ T' +~ G') x U.
-Proof.
-  induction G'.
-  - constructor. inversion H; subst. contradiction. assumption.
-  - simpl. inversion 1; subst.
-    + intros. replace (length (G ~ T +~ G')) with (length (G ~ T' +~ G')).
-      constructor. repeat rewrite length_elim_middle. reflexivity.
-    + constructor. eapply IHG'; eassumption.
-Qed.
-  
+Hint Resolve lookup_lt lookup_map length_elim_middle : core.  
 
 Lemma split_nat : forall m n : nat, n <= m -> ((m - n) + n)%nat = m.
 Proof. lia. Qed.
@@ -748,9 +714,9 @@ Module CC.
   Lemma hasType_inversion_sort : forall (s : sort) G T,
     G |-e s : T -> s = prop /\ (T == type).
   Proof.
-    intros. remember (TSort s0) as e. induction H; subst; try discriminate.
+    intros. remember (TSort s) as e. induction H; subst; try discriminate.
     - inversion Heqe. split. reflexivity. apply e_refl.
-    - assert (TSort s0 = s0) by reflexivity. apply IHhasType in H1. split.
+    - assert (TSort s = s) by reflexivity. apply IHhasType in H1. split.
       apply H1. eapply e_trans. apply e_sym. eassumption. apply H1.
   Qed.
   
@@ -795,7 +761,7 @@ Module CC.
     (G ~ T |-e e *^ ` (length G) : U *^ ` (length G)).
   Proof.
     intros. remember (\:T e) as t. induction H; subst; try discriminate.
-    - inversion Heqt. subst. split. assumption. split. exists s0. assumption.
+    - inversion Heqt. subst. split. assumption. split. exists s. assumption.
       exists U. split. apply e_refl. split; assumption.
     - intuition. destruct H1. destruct H4. destruct H3. destruct H4. 
       exists x0. split. eapply e_trans. apply e_sym. eassumption. assumption. 
@@ -839,7 +805,7 @@ Module CC.
     intros. remember (t & u :[T ** U]) as e. 
     induction H; subst; try discriminate.
     - inversion Heqe. subst. split. apply e_refl. split. assumption.
-      split. assumption. exists s0. assumption.
+      split. assumption. exists s. assumption.
     - intuition. eapply e_trans. apply e_sym. eassumption. assumption.
   Qed.
 
@@ -882,15 +848,13 @@ Module CC.
      under 0 bound variables and (length G) free variables. *)
   Theorem hasType_closed : forall G e T, G |-e e : T -> closed 0 (length G) e.
   Proof.
-    induction 1; try constructor; eauto.
-    eapply lookup_lt. eassumption.
-    1-2: inversion IHhasType1; subst; eauto.
+    induction 1; try constructor; try inversion IHhasType1; subst; eauto.
   Qed.
 
   Hint Resolve hasType_closed : core.
 
   (* Any pretype in a context is a type. *)
-  Fixpoint wfCx_lookup {G}
+  Fixpoint wfCx_wfTy {G}
     (wfG : G |-cc)
     : forall T, In T G -> exists s : sort, G |-e T : s
 
@@ -905,7 +869,7 @@ Module CC.
       - intros.
         assert (G ~ T = G ~ T +~ map (length G +>) nil) by reflexivity.
         inversion H0; subst.
-        + exists s0. assert (T0 = length G +> T0). symmetry. eauto. 
+        + exists s. assert (T0 = length G +> T0). symmetry. eauto. 
           rewrite H1. rewrite H2. erewrite splice_sort. apply t_thin.
           assumption. econstructor. assumption. rewrite <- H2. eassumption.
         + assert (exists s : sort, G |-e T0 : s) by eauto. destruct H3.
@@ -916,7 +880,14 @@ Module CC.
     * remember (G +~ G') as GG'. destruct eT; subst.
       - constructor. assumption.
       - simpl. destruct (length G <=? x) eqn:E.
-        + 
+        + constructor. assumption. 
+          assert (S x = (S x - length (G ~ U)) + length (G ~ U))%nat.
+          { symmetry. eapply split_nat. apply Nat.leb_le in E. simpl. lia. }
+          rewrite H1. apply lookup_drop_front. 
+          assert (x = (x - length G) + length G)%nat.
+          { simpl in H1. lia. }
+          rewrite H2 in H0. 
+          
 
 
   (* Any pretype in a context is a type. *)
