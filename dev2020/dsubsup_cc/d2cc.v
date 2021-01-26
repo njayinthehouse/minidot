@@ -644,9 +644,69 @@ Module CC.
     | tSnd t => tSnd (k -< t)
     end
     where "k -<" := (unsplice k) : cc_scope.
+  (***************************************************************************
+   * Lemmas about splicing and closedness *)
+
+  (* Splicing distributes on opening. *)
+  Lemma splice_open : forall e t k i, 
+    k +> (e{i :-> t} e) = e{i :-> k +> t} (k +> e).
+  Proof.
+    induction e; simpl; intros; 
+    try (rewrite IHe1; rewrite IHe2; try (rewrite IHe3; rewrite IHe4)); 
+    try rewrite IHe;
+    try reflexivity.
+    - destruct v; simpl. 
+      + destruct (i =? b) eqn:E; reflexivity.
+      + reflexivity.
+  Qed.
+
+  (* Splicing at position f does not mutate an expression closed under f free
+     variables. *)
+  Lemma splice_closed : forall f e b, closed b f e -> f +> e = e.
+  Proof.
+    induction 1; simpl; 
+    try (rewrite IHclosed1; rewrite IHclosed2);
+    try (rewrite IHclosed3; rewrite IHclosed4);
+    try rewrite IHclosed; try reflexivity.
+    destruct (f <=? x) eqn:E.
+    - apply Nat.leb_le in E. lia.
+    - reflexivity.
+  Qed.
+
+  (* Splicing a sort does not change the sort. *)
+  Lemma splice_sort : forall s k, TSort s = k +> s.
+  Proof. reflexivity. Qed.
+
+  Hint Resolve splice_open splice_closed splice_sort : core.
+
+  (* Closedness is monotonic in b and f. *)
+  Lemma closed_monotonic : forall e b f,
+    closed b f e ->
+    forall b' f', b <= b' -> f <= f' ->
+    closed b' f' e.
+  Proof.
+    induction 1; try constructor; try lia; eauto; try apply IHclosed2; 
+    try apply IHclosed4; lia.
+  Qed.
+
+  Hint Resolve closed_monotonic : core.
+
+  (* Opening the outermost bound variable *)
+  Lemma closed_open : forall e b f,
+    closed (S b) f e ->
+    forall u, closed b f u ->
+    closed b f (e{b :-> u} e).
+  Proof.
+    induction e; simpl; inversion 1; subst; try constructor; eauto.
+    destruct (b =? i) eqn:E. auto. apply beq_nat_false in E. constructor. lia.
+  Qed.
+
+  Hint Resolve closed_open : core.
+
 
   (**************************************************************************
-   * Rules for Equality *)
+   * Properties of full beta-pi reduction and equality *)
+
   Lemma e_sig1 : forall T1 T2, 
     T1 == T2 ->
     forall U, TSig T1 U == TSig T2 U.
@@ -657,6 +717,31 @@ Module CC.
     - apply e_sym. apply IHequals.
     - eapply e_trans; auto.
   Qed.
+
+  Hint Resolve e_sig1 : core.
+
+  (* Splicing preserves reduction *)
+  Lemma r_splice : forall e u,
+    e ~~> u ->
+    forall k, k +> e ~~> k +> u.
+  Proof.
+    induction 1; simpl; intros; try rewrite splice_open; constructor; auto.
+  Qed.
+
+  Hint Resolve r_splice : core.
+
+  (* Splicing preserves equality *)
+  Lemma e_splice : forall e u,
+    e == u ->
+    forall k, k +> e == k +> u.
+  Proof.
+    induction 1.
+    - auto using e_red.
+    - auto using e_refl.
+    - auto using e_sym.
+    - eauto using e_trans.
+  Qed.
+
 
   (**************************************************************************
    * Inversion Lemmas *)
@@ -783,62 +868,6 @@ Module CC.
   Qed.
 
   (***************************************************************************
-   * Lemmas about splicing and closedness *)
-
-  (* Splicing distributes on opening. *)
-  Lemma splice_open : forall e t k i, 
-    k +> (e{i :-> t} e) = e{i :-> k +> t} (k +> e).
-  Proof.
-    induction e; simpl; intros; 
-    try (rewrite IHe1; rewrite IHe2; try (rewrite IHe3; rewrite IHe4)); 
-    try rewrite IHe;
-    try reflexivity.
-    - destruct v; simpl. 
-      + destruct (i =? b) eqn:E; reflexivity.
-      + reflexivity.
-  Qed.
-
-  (* Splicing at position f does not mutate an expression closed under f free
-     variables. *)
-  Lemma splice_closed : forall f e b, closed b f e -> f +> e = e.
-  Proof.
-    induction 1; simpl; 
-    try (rewrite IHclosed1; rewrite IHclosed2);
-    try (rewrite IHclosed3; rewrite IHclosed4);
-    try rewrite IHclosed; try reflexivity.
-    destruct (f <=? x) eqn:E.
-    - apply Nat.leb_le in E. lia.
-    - reflexivity.
-  Qed.
-
-  (* Splicing a sort does not change the sort. *)
-  Lemma splice_sort : forall s k, TSort s = k +> s.
-  Proof. reflexivity. Qed.
-
-  Hint Resolve splice_open splice_closed splice_sort : core.
-
-  (* Closedness is monotonic in b and f. *)
-  Lemma closed_monotonic : forall e b f,
-    closed b f e ->
-    forall b' f', b <= b' -> f <= f' ->
-    closed b' f' e.
-  Proof.
-    induction 1; try constructor; try lia; eauto; apply IHclosed2; lia.
-  Qed.
-
-  Hint Resolve closed_monotonic : core.
-
-  (* Opening the outermost bound variable *)
-  Lemma closed_open : forall e b f,
-    closed (S b) f e ->
-    forall u, closed b f u ->
-    closed b f (e{b :-> u} e).
-  Proof.
-    induction e; simpl; inversion 1; subst; try constructor; eauto.
-    - destruct (b =? i) eqn:E. auto. apply beq_nat_false in E. constructor.
-      lia.
-
-  (***************************************************************************
    * Properties of expressions and types *)
 
   (* If an expression is well-typed under G, then G is a context. *)
@@ -848,6 +877,47 @@ Module CC.
   Qed.
 
   Hint Resolve hasType_wfCx : core.
+
+  (* If an expression is well-typed under G, then the expression is closed
+     under 0 bound variables and (length G) free variables. *)
+  Theorem hasType_closed : forall G e T, G |-e e : T -> closed 0 (length G) e.
+  Proof.
+    induction 1; try constructor; eauto.
+    eapply lookup_lt. eassumption.
+    1-2: inversion IHhasType1; subst; eauto.
+  Qed.
+
+  Hint Resolve hasType_closed : core.
+
+  (* Any pretype in a context is a type. *)
+  Fixpoint wfCx_lookup {G}
+    (wfG : G |-cc)
+    : forall T, In T G -> exists s : sort, G |-e T : s
+
+  (* Splicing preserves well-typedness. *)
+  with t_thin {G G' e T}
+    (eT : G +~ G' |-e e : T)
+        {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-cc)
+    : G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
+  Proof.
+    * induction wfG.
+      - inversion 1.
+      - intros.
+        assert (G ~ T = G ~ T +~ map (length G +>) nil) by reflexivity.
+        inversion H0; subst.
+        + exists s0. assert (T0 = length G +> T0). symmetry. eauto. 
+          rewrite H1. rewrite H2. erewrite splice_sort. apply t_thin.
+          assumption. econstructor. assumption. rewrite <- H2. eassumption.
+        + assert (exists s : sort, G |-e T0 : s) by eauto. destruct H3.
+          exists x. assert (T0 = length G +> T0). symmetry. eauto.
+          rewrite H1. rewrite H4. erewrite splice_sort. apply t_thin.
+          assumption. econstructor; eassumption.
+
+    * remember (G +~ G') as GG'. destruct eT; subst.
+      - constructor. assumption.
+      - simpl. destruct (length G <=? x) eqn:E.
+        + 
+
 
   (* Any pretype in a context is a type. *)
   Theorem wfCx_lookup : forall G,
