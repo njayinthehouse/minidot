@@ -404,7 +404,7 @@ Module CC.
     | t $ u => (e{i :-> e'} t) $ (e{i :-> e'} u)
     | TSig T U => TSig (e{i :-> e'} T) (e{S i :-> e'} U)
     | t & u :[T ** U] => 
-        (e{i :-> e'} t) & (e{i :-> e'} u) :[e{i :-> e'} T ** e{i :-> e'} U]
+        (e{i :-> e'} t) & (e{i :-> e'} u) :[e{i :-> e'} T ** e{S i :-> e'} U]
     | tFst t => tFst (e{i :-> e'} t)
     | tSnd t => tSnd (e{i :-> e'} t)
     end
@@ -434,7 +434,7 @@ Module CC.
     | cl_sig : forall T U,
         closed b f T -> closed (S b) f U -> closed b f (TSig T U)
     | cl_pair : forall t u T U,
-        closed b f t -> closed b f u -> closed b f (TSig T U) ->
+        closed b f t -> closed b f u -> closed b f T -> closed (S b) f U ->
         closed b f (t & u :[T ** U])
     | cl_fst : forall t, closed b f t -> closed b f (tFst t)
     | cl_snd : forall t, closed b f t -> closed b f (tSnd t).
@@ -782,6 +782,9 @@ Module CC.
       apply e_sym. eassumption. assumption. exists x0. assumption.
   Qed.
 
+  (***************************************************************************
+   * Lemmas about splicing and closedness *)
+
   (* Splicing distributes on opening. *)
   Lemma splice_open : forall e t k i, 
     k +> (e{i :-> t} e) = e{i :-> k +> t} (k +> e).
@@ -801,17 +804,42 @@ Module CC.
   Proof.
     induction 1; simpl; 
     try (rewrite IHclosed1; rewrite IHclosed2);
-    try rewrite IHclosed.
-    2: destruct (f <=? x) eqn:E. 
-    2: apply Nat.leb_le in E; try lia.
-    1-10: try reflexivity.
-    inversion IHclosed3. subst. repeat rewrite H3. repeat rewrite H4. 
-    reflexivity.
+    try (rewrite IHclosed3; rewrite IHclosed4);
+    try rewrite IHclosed; try reflexivity.
+    destruct (f <=? x) eqn:E.
+    - apply Nat.leb_le in E. lia.
+    - reflexivity.
   Qed.
 
   (* Splicing a sort does not change the sort. *)
   Lemma splice_sort : forall s k, TSort s = k +> s.
   Proof. reflexivity. Qed.
+
+  Hint Resolve splice_open splice_closed splice_sort : core.
+
+  (* Closedness is monotonic in b and f. *)
+  Lemma closed_monotonic : forall e b f,
+    closed b f e ->
+    forall b' f', b <= b' -> f <= f' ->
+    closed b' f' e.
+  Proof.
+    induction 1; try constructor; try lia; eauto; apply IHclosed2; lia.
+  Qed.
+
+  Hint Resolve closed_monotonic : core.
+
+  (* Opening the outermost bound variable *)
+  Lemma closed_open : forall e b f,
+    closed (S b) f e ->
+    forall u, closed b f u ->
+    closed b f (e{b :-> u} e).
+  Proof.
+    induction e; simpl; inversion 1; subst; try constructor; eauto.
+    - destruct (b =? i) eqn:E. auto. apply beq_nat_false in E. constructor.
+      lia.
+
+  (***************************************************************************
+   * Properties of expressions and types *)
 
   (* If an expression is well-typed under G, then G is a context. *)
   Theorem hasType_wfCx : forall G e T, G |-e e : T -> G |-cc.
