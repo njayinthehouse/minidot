@@ -426,10 +426,35 @@ Module CC.
     | cl_fst : forall t, closed b f t -> closed b f (tFst t)
     | cl_snd : forall t, closed b f t -> closed b f (tSnd t).
 
+  (* For beta reduction, we need a way to decrement bound variables in the
+     body of the abstraction. This is pretty upsetting, because what was the
+     point of going with locally nameless representation if at the end I
+     still need this operation, and all the lemmas that come with it? *)
+  Fixpoint beta_open' (i : nat) (e u : expr) : expr :=
+    match e with
+    | tVar #j => match (i ?= j) with
+                 | Eq => u
+                 | Lt => # (j - 1)
+                 | Gt => #j
+                 end
+    | TSort _ | tVar `_ => e
+    | TAll T U => TAll (beta_open' i T u) (beta_open' (S i) U u)
+    | \:T t => \:(beta_open' i T u) (beta_open' (S i) t u)
+    | t $ t' => (beta_open' i t u) $ (beta_open' i t' u)
+    | TSig T U => TSig (beta_open' i T u) (beta_open' (S i) U u)
+    | t & t' :[T ** U] =>
+        (beta_open' i t u) & (beta_open' i t' u)
+        :[(beta_open' i T u) ** (beta_open' (S i) U u)]
+    | tFst t => tFst (beta_open' i t u)
+    | tSnd t => tSnd (beta_open' i t u)
+    end.
+  Definition beta_open := beta_open' 0.
+  Infix "^$" := beta_open (at level 50).
+
   (* Full beta-pi reduction *)
   (* TODO: Do we need eta equality? *)
   Inductive reduce : expr -> expr -> Prop :=
-    | r_beta : forall T e u, (\:T e) $ u ~~> e *^ u
+    | r_beta : forall T e u, (\:T e) $ u ~~> e ^$ u
     | r_pi1 : forall e u T U, tFst (e & u :[T ** U]) ~~> e
     | r_pi2 : forall e u T U, tSnd (e & u :[T ** U]) ~~> u
     | r_all1 : forall T U T', T ~~> T' -> TAll T U ~~> TAll T' U
