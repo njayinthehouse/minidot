@@ -70,7 +70,7 @@ Proof.
       * apply beq_nat_false in E. eapply IHG with (x := x). lia. eassumption.
 Qed.
 
-Lemma lookup_drop_front : forall ty G G' x (T : ty),
+Lemma lookup_app_front : forall ty G G' x (T : ty),
   lookup G' x T <-> lookup (G +~ G') (x + length G)%nat T.
 Proof.
   split.
@@ -89,12 +89,36 @@ Proof.
         -- rewrite <- beq_nat_refl in E. discriminate.
         -- assumption.
 
-  * induction G.
-    - rewrite app_nil_r. assert (x + 0 = x)%nat. lia. simpl. rewrite H. auto.
-    - simpl. (* Needed for t_thin. *)
+  * induction G'.
+    - simpl. intros. assert (~ (lookup G (x + length G)%nat T)).
+      { apply lookup_fail. lia. }
+      contradiction.
+    - inversion 1; subst.
+      + assert (x = length G'). rewrite app_length in H3. lia. subst.
+        constructor.
+      + constructor. eauto.
 Qed.
 
+Lemma lookup_app_back : forall ty G x (T : ty),
+  lookup G x T <-> forall G', lookup (G +~ G') x T.
+Proof.
+  split. 
+  * induction G'. assumption. constructor. assumption.
+  * intros. pose (H nil). assumption.
+Qed.
 
+Lemma lookup_app_back' : forall ty G' G x (T : ty),
+  lookup G x T <-> x < length G /\ lookup (G +~ G') x T.
+Proof.
+  split.
+  * split. eapply lookup_lt. eassumption.
+    rewrite lookup_app_back in H. auto.
+  * intuition. induction G'.
+    - assumption.
+    - apply IHG'. inversion H1; subst.
+      + rewrite app_length in H0. lia.
+      + assumption.
+Qed.
 
 Lemma length_elim_middle : forall ty G G' (T : ty), 
   length (G ~ T +~ G') = S (length (G +~ G')).
@@ -104,7 +128,15 @@ Proof.
   - simpl. intros. rewrite IHG'. reflexivity.
 Qed.
 
-Hint Resolve lookup_lt lookup_map length_elim_middle : core.  
+Lemma lookup_in : forall ty G x (T : ty), lookup G x T -> In T G.
+Proof.
+  induction 1. 
+  - simpl. left. reflexivity.
+  - simpl. right. assumption.
+Qed.
+
+Hint Resolve lookup_lt lookup_map length_elim_middle lookup_in
+             lookup_app_front lookup_app_back lookup_app_back' : core.  
 
 Lemma split_nat : forall m n : nat, n <= m -> ((m - n) + n)%nat = m.
 Proof. lia. Qed.
@@ -318,18 +350,7 @@ End D.
  * [X] Splicing
  * [ ] Evaluation
  * [ ] Optional: Locally closed predicate
- * - Required Lemmas (TBD) 
- * Can you express expresssion equality in terms of beta reduction? Charguer
-   does it here using locally nameless + cofinite quant, so we should be able
-   to do the same. 
-   https://github.com/charguer/formalmetacoq/blob/master/ln/CoC_Definitions.v
-   However, it's not clear to me that this system can naively be extended with
-   primite dependent tuples -- I'd have to prove that by hand. Pierce in 
-   ATAPL states that CC can be extended with these, but his formulation of CC
-   is weird, since he derives it by extending LF. 
-   However, these lecture notes show that it can be done.
-   http://www4.di.uminho.pt/~mjf/pub/PSVC-Lecture7.pdf
-   TODO: Discuss this with Oliver and Tiark. *)
+ * - Required Lemmas (TBD) *)
 
 Module CC.
 
@@ -610,6 +631,7 @@ Module CC.
     | tSnd t => tSnd (k -< t)
     end
     where "k -<" := (unsplice k) : cc_scope.
+
   (***************************************************************************
    * Lemmas about splicing and closedness *)
 
@@ -643,6 +665,16 @@ Module CC.
   Lemma splice_sort : forall s k, TSort s = k +> s.
   Proof. reflexivity. Qed.
 
+  (* Splicing the domain and codomain of a dependent function type is the
+     same as splicing the dependent function type. *)
+  Lemma splice_all : forall T U k, TAll (k +> T) (k +> U) = k +> (TAll T U).
+  Proof. reflexivity. Qed.
+
+  (* Splicing the components of a sigma type is the same as splicing the
+     sigma type. *)
+  Lemma splice_sig : forall T U k, TSig (k +> T) (k +> U) = k +> (TSig T U).
+  Proof. reflexivity. Qed.
+
   Hint Resolve splice_open splice_closed splice_sort : core.
 
   (* Closedness is monotonic in b and f. *)
@@ -668,7 +700,6 @@ Module CC.
   Qed.
 
   Hint Resolve closed_open : core.
-
 
   (**************************************************************************
    * Properties of full beta-pi reduction and equality *)
@@ -708,9 +739,8 @@ Module CC.
     - eauto using e_trans.
   Qed.
 
-
   (**************************************************************************
-   * Inversion Lemmas *)
+   * Typing inversion Lemmas *)
   Lemma hasType_inversion_sort : forall (s : sort) G T,
     G |-e s : T -> s = prop /\ (T == type).
   Proof.
@@ -853,177 +883,129 @@ Module CC.
 
   Hint Resolve hasType_closed : core.
 
-  (* Any pretype in a context is a type. *)
-  Fixpoint wfCx_wfTy {G}
-    (wfG : G |-cc)
-    : forall T, In T G -> exists s : sort, G |-e T : s
+  (* Any pretype in a context is closed under that context. *)
+  Theorem wfCx_closed : forall G, 
+    G |-cc -> forall T, In T G -> closed 0 (length G) T.
+  Proof.
+    induction 1. inversion 1. intros. destruct H1; subst.
+    1: apply hasType_closed in H0. 
+    1,2: eapply closed_monotonic. eassumption. lia.
+         simpl. lia. apply IHwfCx. assumption. lia. simpl. lia.
+  Qed.
+
+  (* The prefix of any context is a context. *)
+  Theorem wfCx_drop_back : forall G' G,
+    G +~ G' |-cc -> G |-cc.
+  Proof.
+    induction G'. auto. inversion 1. subst. auto.
+  Qed.
+
+  Hint Resolve wfCx_closed wfCx_drop_back : core.
+
+  (* Splicing preserves lookups on contexts. *)
+  Corollary lookup_splice_wfCx : forall G' G,
+    G +~ G' |-cc ->
+    forall x T, lookup (G +~ G') x T ->
+    forall U, G ~ U +~ map (length G +>) G' |-cc ->
+    lookup (G ~ U +~ map (length G +>) G') (if length G <=? x then S x else x)
+           (length G +> T).
+  Proof.
+    intros. destruct (length G <=? x) eqn:E.
+    - apply Nat.leb_le in E. apply split_nat in E as E'. 
+      assert (S x = S x - length (G ~ U) + length (G ~ U))%nat.
+      { simpl. lia. }
+      rewrite H2. apply lookup_app_front. simpl. apply lookup_map.
+      rewrite lookup_app_front. rewrite <- E' in H0. eassumption.
+    - assert (x < length G). admit (*E*). 
+      assert (forall G0, G ~ U +~ G0 = G +~ (nil ~ U +~ G0)).
+      { intros. rewrite <- app_assoc. reflexivity. }
+      rewrite H3. apply lookup_app_back'.
+      assert (lookup G x T). 
+      { eapply lookup_app_back'. split. lia. eassumption. }
+      assert (closed 0 (length G) T). apply lookup_in in H4. eauto. 
+      assert (length G +> T = T). eauto.
+      rewrite H6. assumption.
+  Admitted.
+
+  (* Splicing preserves closedness under contexts. *)
+  Corollary closed_splice_wfCx : forall G' G,
+    G +~ G' |-cc ->
+    forall e b, closed b (length (G +~ G')) e ->
+    forall U, closed b (length (G ~ U +~ map (length G +>) G'))
+                (length G +> e).
+  Proof.
+    induction e; inversion 1; subst; simpl; constructor; eauto;
+    try destruct (length G <=? x); rewrite length_elim_middle;
+    rewrite app_length in *; rewrite map_length; lia.
+  Qed.
+
+  Hint Resolve lookup_splice_wfCx closed_splice_wfCx : core.
 
   (* Splicing preserves well-typedness. *)
-  with t_thin {G G' e T}
+  Fixpoint t_thin {G G' e T}
     (eT : G +~ G' |-e e : T)
         {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-cc)
     : G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
   Proof.
-    * induction wfG.
-      - inversion 1.
-      - intros.
-        assert (G ~ T = G ~ T +~ map (length G +>) nil) by reflexivity.
-        inversion H0; subst.
-        + exists s. assert (T0 = length G +> T0). symmetry. eauto. 
-          rewrite H1. rewrite H2. erewrite splice_sort. apply t_thin.
-          assumption. econstructor. assumption. rewrite <- H2. eassumption.
-        + assert (exists s : sort, G |-e T0 : s) by eauto. destruct H3.
-          exists x. assert (T0 = length G +> T0). symmetry. eauto.
-          rewrite H1. rewrite H4. erewrite splice_sort. apply t_thin.
-          assumption. econstructor; eassumption.
-
-    * remember (G +~ G') as GG'. destruct eT; subst.
-      - constructor. assumption.
-      - simpl. destruct (length G <=? x) eqn:E.
-        + constructor. assumption. 
-          assert (S x = (S x - length (G ~ U)) + length (G ~ U))%nat.
-          { symmetry. eapply split_nat. apply Nat.leb_le in E. simpl. lia. }
-          rewrite H1. apply lookup_drop_front. 
-          assert (x = (x - length G) + length G)%nat.
-          { simpl in H1. lia. }
-          rewrite H2 in H0. 
+    remember (G +~ G') as GG'. destruct eT; subst.
+    - constructor. assumption.
+    - constructor. assumption. auto.
+    - assert (G ~ U +~ map (length G +>) G' |-e length G +> T : sT).
+      { erewrite splice_sort. apply t_thin; eauto. }
+      simpl. econstructor; eauto.
+      assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
+              = length G +> ` (length (G +~ G'))).
+      { repeat rewrite app_length. rewrite map_length. simpl.
+        assert (length G <= length G' + length G) by lia.
+        apply Nat.leb_le in H1. rewrite H1. 
+        rewrite plus_n_Sm. reflexivity. }
+      rewrite H1. rewrite <- splice_open. 
+      assert (forall f T,
+        (G ~ U +~ map f G') ~ f T = G ~ U +~ map f (G' ~ T))
+        by reflexivity.
+      rewrite H2. erewrite splice_sort. apply t_thin. assumption.
+      simpl. econstructor; eauto. 
+    - assert (G ~ U +~ map (length G +>) G' |-e length G +> T : s).
+      { erewrite splice_sort. apply t_thin; eauto. }
+      simpl. econstructor; eauto. rewrite splice_all. eauto.
+      assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
+              = length G +> ` (length (G +~ G'))).
+      { repeat rewrite app_length. rewrite map_length. simpl.
+        assert (length G <= length G' + length G) by lia.
+        apply Nat.leb_le in H2. rewrite H2. 
+        rewrite plus_n_Sm. reflexivity. }
+      rewrite H2. rewrite <- splice_open. 
+      assert (forall f T,
+        (G ~ U +~ map f G') ~ f T = G ~ U +~ map f (G' ~ T))
+        by reflexivity.
+      rewrite H3. rewrite <- splice_open. apply t_thin. assumption.
+      simpl. econstructor; eauto. 
+    - simpl. rewrite splice_open. econstructor; eauto. rewrite splice_all.
+      eauto.
+    - assert (G ~ U +~ map (length G +>) G' |-e length G +> T : sT).
+      { erewrite splice_sort. apply t_thin; eauto. }
+      simpl. econstructor; eauto.
+      assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
+              = length G +> ` (length (G +~ G'))).
+      { repeat rewrite app_length. rewrite map_length. simpl.
+        assert (length G <= length G' + length G) by lia.
+        apply Nat.leb_le in H1. rewrite H1. 
+        rewrite plus_n_Sm. reflexivity. }
+      rewrite H1. rewrite <- splice_open. 
+      assert (forall f T,
+        (G ~ U +~ map f G') ~ f T = G ~ U +~ map f (G' ~ T))
+        by reflexivity.
+      rewrite H2. erewrite splice_sort. apply t_thin. assumption.
+      simpl. econstructor; eauto. 
+    - simpl. econstructor; eauto. rewrite splice_sig. erewrite splice_sort.
+      apply t_thin; eauto. rewrite <- splice_open. apply t_thin; eauto.
+    - simpl. apply t_fst with (U := length G +> U0). rewrite splice_sig.
+      apply t_thin; eauto.
+    - simpl. rewrite splice_open. apply t_snd with (T := length G +> T).
+      rewrite splice_sig. apply t_thin; eauto.
+    - apply t_thin. econstructor. eassumption. assumption. assumption.
+  Qed.
           
-
-
-  (* Any pretype in a context is a type. *)
-  Theorem wfCx_lookup : forall G,
-    G |-cc ->
-    forall T, In T G ->
-    exists s : sort, G |-e T : s
-
-  (* Splicing preserves well-typedness. *)
-  with t_thin : forall e G G' T,
-    G +~ G' |-e e : T ->
-    forall U, G ~ U +~ map (length G +>) G' |-cc ->
-    G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T
-
-  (* Splicing preserves beta-pi equivalence. *)
-  with eq_splice : forall e u,
-    e == u ->
-    forall k, k +> e == k +> u
-
-  (* Splicing preserves lookups on context. *)
-  with lookup_splice : forall G' G,
-    G +~ G' |-cc ->
-    forall x T, lookup (G +~ G') x T ->
-    forall U, G ~ U +~ map (length G +>) G' |-cc ->
-    lookup (G ~ U +~ map (length G +>) G') 
-      (if length G <=? x then S x else x) (length G +> T)
-
-  (* Weakening rule *)
-  with t_weak : forall G e T,
-    G |-e e : T ->
-    forall U, G ~ U |-cc ->
-    G ~ U |-e e : T.
-  Proof.
-    * induction 1; inversion 1; subst. 
-      - exists s0. apply t_weak. assumption. econstructor; eassumption. 
-      - apply IHwfCx in H2 as H3. destruct H3. exists x. apply t_weak. 
-        assumption. econstructor; eassumption.
-    
-    * induction e using (well_founded_induction wfR); intros; 
-      apply hasType_wfCx in H0 as wfGG'; destruct e.
-      - simpl. apply hasType_inversion_sort in H0. destruct H0.
-        rewrite H0. econstructor. constructor. assumption.
-        replace (TSort type) with (length G +> type). apply eq_splice. 
-        apply e_sym. assumption. reflexivity.
-      - destruct v.
-        + apply hasType_inversion_varB in H0. contradiction.
-        + apply hasType_inversion_varF in H0. destruct H0.
-          -- constructor. assumption. apply lookup_splice. assumption.
-             assumption. assumption.
-          -- destruct H0. destruct H0. remember (length G +> T) as T'.
-             eapply t_conv. constructor. assumption. apply lookup_splice.
-             assumption. eassumption. assumption. subst. apply eq_splice.
-             assumption.
-      - simpl. apply hasType_inversion_all in H0. destruct H0.
-        do 2 destruct H2. do 2 destruct H3. remember (length G +> T) as T'. 
-        eapply t_conv. econstructor. admit (* Some lemma on closed splicing *).
-        erewrite splice_sort. apply H. constructor. eassumption. assumption.
-        assert (tVar ` (length (G ~ U +~ map (length G +>) G')) = 
-                length G +> ` (length (G +~ G'))).
-        { rewrite length_elim_middle. simpl. 
-          replace (length G <=? length (G +~ G')) with true. 
-          repeat rewrite app_length. rewrite map_length. reflexivity. 
-          symmetry. rewrite Nat.leb_le. rewrite app_length. lia. }
-        rewrite H4. rewrite <- splice_open. 
-        assert ((G ~ U +~ map (length G +>) G') ~ length G +> e1 = 
-                G ~ U +~ map (length G +>) (G' ~ e1)) by reflexivity.
-        rewrite H5.
-        assert (G ~ U +~ map (length G +>) (G' ~ e1)
-                |-e length G +> (s0 *^ ` (length (G +~ G')))
-                : length G +> x).
-        { apply H. constructor. assumption. simpl. econstructor.
-          assumption. erewrite splice_sort. apply H. constructor. eassumption.
-          assumption. }
-      - simpl. apply hasType_inversion_lam in H0. do 2 destruct H0.
-        do 2 destruct H2. remember (length G +> T) as T'. econstructor.
-        econstructor. erewrite splice_sort. apply H. constructor.
-        eassumption. assumption. 
-        assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
-                = length G +> ` (length (G +~ G'))).
-        { rewrite length_elim_middle. repeat rewrite app_length. 
-          rewrite map_length. simpl. 
-          replace (length G <=? length G' + length G) with true. reflexivity.
-          symmetry. apply Nat.leb_le. lia. }
-        rewrite H4. 
-        assert (G ~ U +~ map (length G +>) (G' ~ e1) 
-                |-e length G +> (e2 *^ ` (length (G +~ G'))) 
-                    : length G +> (x0 *^ ` (length (G +~ G')))).
-        { apply H. constructor. simpl. eassumption. simpl. econstructor.
-          assumption. erewrite splice_sort. apply H. constructor. eassumption.
-          assumption. }
-        assert (map (length G +>) G' ~ length G +> e1 
-                = map (length G +>) (G' ~ e1)) by reflexivity.
-        rewrite app_comm_cons. rewrite H6. repeat rewrite splice_open in H5.
-        exact H5. subst. 
-        replace (TAll (length G +> e1) (length G +> x0)) 
-          with (length G +> (TAll e1 x0)). apply eq_splice. apply e_sym.
-        assumption. reflexivity.
-      - simpl. apply hasType_inversion_app in H0. do 2 destruct H0. 
-        do 2 destruct H2. remember (length G +> T) as T'. econstructor.
-        econstructor. 
-        assert (G ~ U +~ map (length G +>) G' 
-                |-e length G +> e1 
-                : length G +> (TAll x0 x)).
-        { apply H. constructor. assumption. assumption. }
-        simpl in H4. exact H4. apply H. constructor. assumption. assumption.
-        rewrite <- splice_open. subst. apply eq_splice. apply e_sym.
-        assumption.
-      - simpl. apply hasType_inversion_sig in H0. do 2 destruct H0.
-        do 2 destruct H2. remember (length G +> T) as T'. 
-        apply t_conv with (T := length G +> x0). econstructor.
-        assert (forall s : sort, TSort s = length G +> s) by reflexivity.
-        rewrite H4. apply H. constructor. eassumption. assumption.
-        assert (tVar ` (length (G ~ U +~ map (length G +>) G')) = 
-                length G +> ` (length (G +~ G'))).
-        { rewrite length_elim_middle. simpl. 
-          replace (length G <=? length (G +~ G')) with true. 
-          repeat rewrite app_length. rewrite map_length. reflexivity. 
-          symmetry. rewrite Nat.leb_le. rewrite app_length. lia. }
-        rewrite H4. rewrite <- splice_open.
-        assert ((G ~ U +~ map (length G +>) G') ~ length G +> e1 = 
-                G ~ U +~ map (length G +>) (G' ~ e1)) by reflexivity.
-        rewrite H5. assert (forall s, TSort s = length G +> s) by reflexivity.
-        rewrite H6. apply H. constructor. apply H3. simpl. econstructor.
-        assumption. rewrite H6. apply H. constructor. eassumption. assumption.
-        subst. apply eq_splice. apply e_sym. assumption.
-      - simpl. apply hasType_inversion_pair in H0. destruct H0. 
-        do 2 destruct H2. do 2 destruct H3. destruct H4. destruct H5. subst.
-        remember (length G +> T) as T'. simpl. econstructor. econstructor.
-        econstructor. erewrite splice_sort. apply H. 
-      - admit.
-      - admit.
-    
-
-        
-        
-
   (*************************************************************************
    * Embedding of System D<:> 
    * --------------------------------*)
