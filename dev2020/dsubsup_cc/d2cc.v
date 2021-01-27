@@ -540,7 +540,7 @@ Module CC.
     | TSort _ | tVar _ => 0
     | TAll T U | \:T U | T $ U | TSig T U => S (esize_flat T + esize_flat U)
     | t & u :[T ** U] => 
-        S (esize_flat t + esize_flat u + esize_flat T + esize_flat U)
+        S (esize_flat t + esize_flat u + S (esize_flat T + esize_flat U))
     | tFst t | tSnd t => S (esize_flat t)
     end.
 
@@ -568,6 +568,7 @@ Module CC.
     | lt_pair2 : forall t u T U, R u (t & u :[T ** U])
     | lt_pairT : forall t u T U, R T (t & u :[T ** U])
     | lt_pairU : forall t u T U, R U (t & u :[T ** U])
+    | lt_pair_sig : forall t u T U, R (TSig T U) (t & u :[T ** U])
     | lt_fst : forall t, R t (tFst t)
     | lt_snd : forall t, R t (tSnd t).
 
@@ -575,7 +576,7 @@ Module CC.
   Lemma wfR' : forall n e, esize_flat e <= n -> Acc R e.
   Proof.
     induction n; destruct e; constructor; inversion 1; subst; simpl in *;
-    try (apply IHn; try rewrite <- esize_open); lia.
+    try (apply IHn; try rewrite <- esize_open); simpl; lia.
   Qed.
 
   Lemma wfR : well_founded R.
@@ -942,69 +943,113 @@ Module CC.
   Hint Resolve lookup_splice_wfCx closed_splice_wfCx : core.
 
   (* Splicing preserves well-typedness. *)
-  Fixpoint t_thin {G G' e T}
-    (eT : G +~ G' |-e e : T)
-        {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-cc)
-    : G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
+  Lemma t_thin : forall e G G' T,
+    G +~ G' |-e e : T ->
+    forall U, G ~ U +~ map (length G +>) G' |-cc ->
+    G ~ U +~ map (length G +>) G' |-e length G +> e : length G +> T.
   Proof.
-    remember (G +~ G') as GG'. destruct eT; subst.
-    - constructor. assumption.
-    - constructor. assumption. auto.
-    - assert (G ~ U +~ map (length G +>) G' |-e length G +> T : sT).
-      { erewrite splice_sort. apply t_thin; eauto. }
-      simpl. econstructor; eauto.
+    induction e using (well_founded_induction wfR). destruct e;
+    intros G G' T eT U wfGUG'.
+    - apply hasType_inversion_sort in eT. intuition. subst. econstructor.
+      constructor. assumption. erewrite splice_sort. apply e_splice.
+      apply e_sym. assumption.
+    - destruct v.
+      + apply hasType_inversion_varB in eT. contradiction.
+      + apply hasType_inversion_varF in eT as fT. destruct fT.
+        * constructor; eauto.
+        * destruct H0. intuition. eapply t_conv. constructor; eauto.
+          apply e_splice. assumption.
+    - apply hasType_inversion_all in eT. intuition. destruct H2, H3.
+      intuition. 
+      assert (G ~ U +~ map (length G +>) G' |-e length G +> e1 : x).
+      { erewrite splice_sort. apply H; eauto. constructor. }
+      econstructor. simpl. apply t_all with (sT := x); eauto. 
       assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
               = length G +> ` (length (G +~ G'))).
       { repeat rewrite app_length. rewrite map_length. simpl.
         assert (length G <= length G' + length G) by lia.
-        apply Nat.leb_le in H1. rewrite H1. 
+        apply Nat.leb_le in H5. rewrite H5. 
         rewrite plus_n_Sm. reflexivity. }
-      rewrite H1. rewrite <- splice_open. 
+      rewrite H5. rewrite <- splice_open. erewrite splice_sort.
       assert (forall f T,
         (G ~ U +~ map f G') ~ f T = G ~ U +~ map f (G' ~ T))
         by reflexivity.
-      rewrite H2. erewrite splice_sort. apply t_thin. assumption.
-      simpl. econstructor; eauto. 
-    - assert (G ~ U +~ map (length G +>) G' |-e length G +> T : s).
-      { erewrite splice_sort. apply t_thin; eauto. }
-      simpl. econstructor; eauto. rewrite splice_all. eauto.
+      rewrite H6. apply H; eauto. constructor. econstructor; eauto.
+      erewrite splice_sort. apply e_splice. apply e_sym. assumption.
+    - apply hasType_inversion_lam in eT. intuition. destruct H2, H3.
+      intuition.
+      assert (G ~ U +~ map (length G +>) G' |-e length G +> e1 : x).
+      { erewrite splice_sort. apply H; eauto. constructor. }
+      apply t_conv with (T := length G +> (TAll e1 x0)). 
+      simpl. econstructor; eauto. inversion H2; subst. constructor; eauto.
       assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
               = length G +> ` (length (G +~ G'))).
       { repeat rewrite app_length. rewrite map_length. simpl.
         assert (length G <= length G' + length G) by lia.
-        apply Nat.leb_le in H2. rewrite H2. 
+        apply Nat.leb_le in H6. rewrite H6. 
         rewrite plus_n_Sm. reflexivity. }
-      rewrite H2. rewrite <- splice_open. 
+      rewrite H6. repeat rewrite <- splice_open.
       assert (forall f T,
         (G ~ U +~ map f G') ~ f T = G ~ U +~ map f (G' ~ T))
         by reflexivity.
-      rewrite H3. rewrite <- splice_open. apply t_thin. assumption.
-      simpl. econstructor; eauto. 
-    - simpl. rewrite splice_open. econstructor; eauto. rewrite splice_all.
-      eauto.
-    - assert (G ~ U +~ map (length G +>) G' |-e length G +> T : sT).
-      { erewrite splice_sort. apply t_thin; eauto. }
-      simpl. econstructor; eauto.
+      rewrite H7. apply H; eauto. constructor. econstructor; eauto.
+      apply e_splice. apply e_sym. assumption.
+    - apply hasType_inversion_app in eT. destruct eT. intuition. destruct H2.
+      intuition. 
+      simpl. apply t_conv with (T := length G +> (x *^ e2)).
+      rewrite splice_open. apply t_app with (T := length G +> x0).
+      rewrite splice_all. apply H; eauto. constructor. apply H; eauto. 
+      constructor. apply e_splice. apply e_sym. assumption.
+    - apply hasType_inversion_sig in eT. intuition. destruct H2, H3.
+      intuition. 
+      assert (G ~ U +~ map (length G +>) G' |-e length G +> e1 : x).
+      { erewrite splice_sort. apply H; eauto. constructor. }
+      econstructor. simpl. apply t_sig with (sT := x); eauto. 
       assert (tVar ` (length (G ~ U +~ map (length G +>) G'))
               = length G +> ` (length (G +~ G'))).
       { repeat rewrite app_length. rewrite map_length. simpl.
         assert (length G <= length G' + length G) by lia.
-        apply Nat.leb_le in H1. rewrite H1. 
+        apply Nat.leb_le in H5. rewrite H5. 
         rewrite plus_n_Sm. reflexivity. }
-      rewrite H1. rewrite <- splice_open. 
+      rewrite H5. rewrite <- splice_open. erewrite splice_sort.
       assert (forall f T,
         (G ~ U +~ map f G') ~ f T = G ~ U +~ map f (G' ~ T))
         by reflexivity.
-      rewrite H2. erewrite splice_sort. apply t_thin. assumption.
-      simpl. econstructor; eauto. 
-    - simpl. econstructor; eauto. rewrite splice_sig. erewrite splice_sort.
-      apply t_thin; eauto. rewrite <- splice_open. apply t_thin; eauto.
-    - simpl. apply t_fst with (U := length G +> U0). rewrite splice_sig.
-      apply t_thin; eauto.
-    - simpl. rewrite splice_open. apply t_snd with (T := length G +> T).
-      rewrite splice_sig. apply t_thin; eauto.
-    - apply t_thin. econstructor. eassumption. assumption. assumption.
+      rewrite H6. apply H; eauto. constructor. econstructor; eauto.
+      erewrite splice_sort. apply e_splice. apply e_sym. assumption.
+    - apply hasType_inversion_pair in eT. intuition. destruct H4.
+      apply t_conv with (T := length G +> (TSig e3 e4)).
+      simpl. econstructor. erewrite splice_sort. rewrite splice_sig.
+      apply H; eauto. constructor. apply H; eauto. constructor.
+      rewrite <- splice_open. apply H; eauto. constructor.
+      apply e_splice. apply e_sym. assumption.
+    - apply hasType_inversion_fst in eT. destruct eT.
+      simpl. apply t_fst with (U := length G +> x). rewrite splice_sig.
+      apply H; eauto. constructor.
+    - apply hasType_inversion_snd in eT. destruct eT. intuition. destruct H2.
+      simpl. apply t_conv with (T := length G +> (x *^ tFst e)).
+      rewrite splice_open. apply t_snd with (T := length G +> x0).
+      rewrite splice_sig. apply H; eauto. constructor. apply e_splice.
+      apply e_sym. assumption.
   Qed.
+
+  Lemma hasType_closed' : forall G e T, G |-e e : T -> closed 0 (length G) T.
+  Proof.
+    induction 1.
+    - constructor.
+    - apply lookup_in in H0. eauto.
+    - constructor.
+    - constructor; eauto. apply closed_splice.
+
+  Theorem t_weak : forall G e T, 
+    G |-e e : T ->
+    forall U, G ~ U |-cc ->
+    G ~ U |-e e : T.
+  Proof.
+    intros. 
+    assert (G ~ U = G ~ U +~ nil) by reflexivity.
+    assert (e = length G +> e). symmetry. eauto.
+    assert
           
   (*************************************************************************
    * Embedding of System D<:> 
