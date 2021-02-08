@@ -732,8 +732,7 @@ Module CC.
   Proof.
     intros. remember (tFst t) as e. induction H; subst; try discriminate.
     - inversion Heqe. subst. exists U. assumption.
-    - intuition. destruct H2. exists x. econstructor. eassumption.
-      econstructor.  eassumption. admit. apply e_sig1. assumption.
+    - intuition. destruct H2. exists x. eapply t_conv. eassumption.
   Admitted.
 
   Lemma hasType_inversion_snd : forall t G V,
