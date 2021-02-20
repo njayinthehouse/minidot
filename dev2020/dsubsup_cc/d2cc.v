@@ -155,7 +155,7 @@ Module CC.
     | tLam : expr -> expr
     | tApp : expr -> expr -> expr
     | TSig : expr -> expr -> expr
-    | tPair : expr -> expr -> expr -> expr -> expr
+    | tPair : expr -> expr -> expr
     | tFst : expr -> expr
     | tSnd : expr -> expr.
 
@@ -163,7 +163,7 @@ Module CC.
   Definition env := list expr.
 
   Notation "t $" := (tApp t) (at level 4) : cc_scope.
-  Notation "t & u :[ T ** U ]" := (tPair t u T U) (at level 4) : cc_scope.
+  Notation "t & u" := (tPair t u) (at level 4) : cc_scope.
   Coercion TSort : sort >-> expr.
   Coercion tVar : var >-> expr.
 
@@ -180,8 +180,7 @@ Module CC.
     | tLam t => tLam (e{S i :-> e'} t)
     | t $ u => (e{i :-> e'} t) $ (e{i :-> e'} u)
     | TSig T U => TSig (e{i :-> e'} T) (e{S i :-> e'} U)
-    | t & u :[T ** U] => 
-      (e{i :-> e'} t) & (e{i :-> e'} u) :[e{i :-> e'} T ** e{S i :-> e'} U]
+    | t & u => (e{i :-> e'} t) & (e{i :-> e'} u)
     | tFst t => tFst (e{i :-> e'} t)
     | tSnd t => tSnd (e{i :-> e'} t)
     end
@@ -207,9 +206,8 @@ Module CC.
         closed b f t -> closed b f u -> closed b f (t $ u)
     | cl_sig : forall T U,
         closed b f T -> closed (S b) f U -> closed b f (TSig T U)
-    | cl_pair : forall t u T U,
-        closed b f t -> closed b f u -> closed b f T -> closed (S b) f U ->
-        closed b f (t & u :[T ** U])
+    | cl_pair : forall t u,
+        closed b f t -> closed b f u -> closed b f (t & u)
     | cl_fst : forall t, closed b f t -> closed b f (tFst t)
     | cl_snd : forall t, closed b f t -> closed b f (tSnd t).
 
@@ -225,9 +223,7 @@ Module CC.
     | tLam t => tLam (decrB' (S i) t)
     | t $ t' => (decrB' i t) $ (decrB' i t')
     | TSig T U => TSig (decrB' i T) (decrB' (S i) U)
-    | t & t' :[T ** U] =>
-        (decrB' i t) & (decrB' i t')
-        :[(decrB' i T) ** (decrB' (S i) U)]
+    | t & t' => (decrB' i t) & (decrB' i t')
     | tFst t => tFst (decrB' i t)
     | tSnd t => tSnd (decrB' i t)
     end.
@@ -240,8 +236,8 @@ Module CC.
   (* Do we need eta equality? *)
   Inductive reduce : expr -> expr -> Prop :=
     | r_beta : forall e u, (tLam e) $ u ~~> e ^$ u
-    | r_pi1 : forall e u T U, tFst (e & u :[T ** U]) ~~> e
-    | r_pi2 : forall e u T U, tSnd (e & u :[T ** U]) ~~> u
+    | r_pi1 : forall e u, tFst (e & u) ~~> e
+    | r_pi2 : forall e u, tSnd (e & u) ~~> u
     | r_all1 : forall T U T', T ~~> T' -> TAll T U ~~> TAll T' U
     | r_all2 : forall T U U', U ~~> U' -> TAll T U ~~> TAll T U'
     | r_lam : forall e e', e ~~> e' -> tLam e ~~> tLam e'
@@ -252,14 +248,8 @@ Module CC.
     (* The lecture notes linked above don't mention adding these 
        substructural rules for pairs, but I think they're required, else
        we can't reduce inside tuples. *)
-    | r_pair1 : forall t u T U t', 
-        t ~~> t' -> (t & u :[T ** U]) ~~> (t' & u :[T ** U])
-    | r_pair2 : forall t u T U u', 
-        u ~~> u' -> (t & u :[T ** U]) ~~> (t & u' :[T ** U])
-    | r_pair3 : forall t u T T' U, 
-        T ~~> T' -> (t & u :[T ** U]) ~~> (t & u :[T' ** U])
-    | r_pair4 : forall t u T U U',
-        U ~~> U' -> (t & u :[T ** U]) ~~> (t & u :[T ** U'])
+    | r_pair1 : forall t u t', t ~~> t' -> t & u ~~> t' & u
+    | r_pair2 : forall t u u', u ~~> u' -> t & u ~~> t & u'
     | r_fst : forall t t', t ~~> t' -> tFst t ~~> tFst t'
     | r_snd : forall t t', t ~~> t' -> tSnd t ~~> tSnd t'
      where "e ~~> u" := (reduce e u) : cc_scope.
@@ -320,7 +310,7 @@ Module CC.
         G |-cc TSig T U : TSort s ->
         G |-cc t : T ->
         G |-cc u : U *^ t ->
-        G |-cc t & u :[T ** U] : TSig T U
+        G |-cc t & u : TSig T U
 
     | t_fst : forall G T U e,
         G |-cc e : TSig T U ->
@@ -344,10 +334,8 @@ Module CC.
   Fixpoint esize_flat (e : expr) : nat :=
     match e with
     | TSort _ | tVar _ => 0
-    | TAll T U | T $ U | TSig T U => S (esize_flat T + esize_flat U)
+    | TAll T U | T $ U | TSig T U | T & U => S (esize_flat T + esize_flat U)
     | tLam t => S (esize_flat t)
-    | t & u :[T ** U] => 
-        S (esize_flat t + esize_flat u + S (esize_flat T + esize_flat U))
     | tFst t | tSnd t => S (esize_flat t)
     end.
 
@@ -361,35 +349,6 @@ Module CC.
     try (destruct v; try destruct (i =? b)); reflexivity.
   Qed.
 
-  (* A well-founded relation *)
-  Inductive R : expr -> expr -> Prop :=
-    | lt_all1 : forall T U, R T (TAll T U)
-    | lt_all2 : forall T U (G : list expr), R (U *^ ` (length G)) (TAll T U)
-    | lt_lam : forall e, R e (tLam e)
-    | lt_app1 : forall t u, R t (t $ u)
-    | lt_app2 : forall t u, R u (t $ u)
-    | lt_sig1 : forall T U, R T (TSig T U)
-    | lt_sig2 : forall T U (G : list expr), R (U *^ ` (length G)) (TSig T U)
-    | lt_pair1 : forall t u T U, R t (t & u :[T ** U])
-    | lt_pair2 : forall t u T U, R u (t & u :[T ** U])
-    | lt_pairT : forall t u T U, R T (t & u :[T ** U])
-    | lt_pairU : forall t u T U, R U (t & u :[T ** U])
-    | lt_pair_sig : forall t u T U, R (TSig T U) (t & u :[T ** U])
-    | lt_fst : forall t, R t (tFst t)
-    | lt_snd : forall t, R t (tSnd t).
-
-  (* Proof that R is well-founded. *)
-  Lemma wfR' : forall n e, esize_flat e <= n -> Acc R e.
-  Proof.
-    induction n; destruct e; constructor; inversion 1; subst; simpl in *;
-    try (apply IHn; try rewrite <- esize_open); simpl; lia.
-  Qed.
-
-  Lemma wfR : well_founded R.
-  Proof.
-    red. intros e. eapply wfR'. auto.
-  Qed.
-
   (* Substitution *)
   Reserved Notation "e[ x :-> u ]" (at level 50).
   Fixpoint subst (x : fVar) (u e : expr) : expr :=
@@ -400,8 +359,7 @@ Module CC.
     | tLam t => tLam (e[x:-> u] t)
     | t $ t' => (e[x :-> u] t) $ (e[x :-> u] t')
     | TSig T U => TSig (e[x :-> u] T) (e[x :-> u] U)
-    | t & t' :[T ** U] => 
-        (e[x :-> u] t) & (e[x :-> u] t') :[e[x :-> u] T ** e[x :-> u] U]
+    | t & t' => (e[x :-> u] t) & (e[x :-> u] t')
     | tFst t => tFst (e[x :-> u] t) 
     | tSnd t => tSnd (e[x :-> u] t)
     end
@@ -417,13 +375,13 @@ Module CC.
     | tLam t => tLam (k +> t)
     | t $ u => (k +> t) $ (k +> u)
     | TSig T U => TSig (k +> T) (k +> U)
-    | t & u :[T ** U] => (k +> t) & (k +> u) :[k +> T ** k +> U]
+    | t & u => (k +> t) & (k +> u)
     | tFst t => tFst (k +> t)
     | tSnd t => tSnd (k +> t)
     end
     where "k +>" := (splice k) : cc_scope.
 
-  (* Unsplicing *)
+  (* Unsplicing 
   Reserved Notation "k -<" (at level 45, right associativity).
   Fixpoint unsplice (k : nat) (e : expr) : expr :=
     match e with
@@ -437,7 +395,7 @@ Module CC.
     | tFst t => tFst (k -< t)
     | tSnd t => tSnd (k -< t)
     end
-    where "k -<" := (unsplice k) : cc_scope.
+     where "k -<" := (unsplice k) : cc_scope. *)
 
   (***************************************************************************
    * Lemmas about splicing and closedness *)
@@ -693,147 +651,94 @@ Module CC.
 
   Hint Resolve wfCx_closed wfCx_drop_back : core.
 
-  Lemma lookup_wfCx_splice : forall G G' x T,
+  Lemma lookup_wfCx_splice : forall G' G x T,
     lookup (G +~ G') x T ->
-    forall U, 
+    forall U, G ~ U +~ map (length G +>) G' |-cc ->
     lookup (G ~ U +~ map (length G +>) G') 
-      (if length G <=? x then S x else x) (length G +> T).
+        (if length G <=? x then S x else x) (length G +> T).
   Proof.
-    intros. destruct (length G <=? x) eqn:E.
-    - assert (x = x - length G + length G)%nat. symmetry. apply split_nat.
-      apply Nat.leb_le. assumption.
-      rewrite H0 in H. rewrite <- lookup_app_front in H.
-      assert (S x = x - length G + length (G ~ U))%nat. simpl. lia.
-      rewrite H1. rewrite <- lookup_app_front. apply lookup_map.
-      assumption.
-    - assert (x < length G). admit (*E*).
+    induction G'; simpl; intros.
+    - replace (length G <=? x) with false. 
+      assert (length G +> T = T). 
+      eapply splice_closed. apply wfCx_closed; eauto. inversion H0. auto.
+      rewrite H1. constructor. assumption.
+      assert (x < length G). eapply lookup_lt. eassumption. 
+      admit (*H1*).
+    - inversion H; subst.
+      + replace (length G <=? length (G +~ G')) with true.
+        replace (S (length (G +~ G'))) 
+          with (length (G ~ U +~ map (length G +>) G')).
+        constructor. rewrite length_elim_middle. repeat rewrite app_length.
+        rewrite map_length. reflexivity. rewrite app_length. symmetry.
+        rewrite Nat.leb_le. lia.
+      + inversion H0. constructor. apply IHG'; eauto.
   Admitted.
 
-  (* hasType_inversion_prop needs this. However, you need something that 
-     resembles preservation to *)
-  Lemma eq_type_not_hasType : 
-    forall T, T == type -> forall G U, ~ (G |-cc T : U).
-  Proof.
-  Admitted.
+  Hint Resolve lookup_wfCx_splice : core.
 
-  Lemma hasType_inversion_type : forall G T, ~ (G |-cc type : T).
-  Proof.
-    remember (TSort type) as e. induction 1; try discriminate.
-    inversion Heqe. subst. auto.
-  Qed.
-
-  Lemma hasType_inversion_prop : forall G T, G |-cc prop : T -> T = type.
-  Proof.
-    remember (TSort prop) as e. induction 1; try discriminate.
-    reflexivity. inversion Heqe. subst. intuition. subst. 
-    assert (~ (G |-cc U : s)). apply eq_type_not_hasType. apply e_sym.
-    auto. contradiction.
-  Qed.
-  
-  Lemma hasType_inversion_varB : forall i G T, ~ (G |-cc #i : T).
-  Proof.
-    unfold not. intros. remember (tVar #i) as v. 
-    induction H; try discriminate; intuition.
-  Qed.
-
-  Lemma hasType_inversion_varF : forall x G T,
-    G |-cc `x : T -> lookup G x T \/ exists U, lookup G x U /\ (U == T).
-  Proof.
-    intros. remember (tVar `x) as e. induction H; subst; try discriminate.
-    - inversion Heqe. subst. intuition.
-    - intuition. right. exists T. split; assumption. right. destruct H3.
-      exists x0. destruct H2. split. auto. eapply e_trans; eassumption.
-  Qed.
-
-  Lemma hasType_inversion_all : forall T U G V,
-    G |-cc TAll T U : V -> 
-    closed 1 (length G) U /\
-    (exists sT : sort, G |-cc T : sT) /\
-    (exists sU : sort, (V == sU) /\ (G ~ T |-cc U *^ ` (length G) : sU)).
-  Proof.
-    intros. remember (TAll T U) as T'. induction H; subst; try discriminate.
-    - inversion HeqT'. subst. split. assumption. split. exists sT. assumption.
-      exists sU. split. apply e_refl. assumption.
-    - intuition. destruct H5. exists x. split. eapply e_trans. apply e_sym.
-      eassumption. intuition. intuition.
-  Qed.
-
-  Lemma hasType_inversion_app : forall e u G V,
-    G |-cc e $ u : V ->
-    exists U, (V == U *^ u) /\ 
-    exists T, (G |-cc e : TAll T U) /\ (G |-cc u : T).
-  Proof.
-    intros. remember (e $ u) as t. induction H; subst; try discriminate.
-    - inversion Heqt. subst. exists U. split. apply e_refl. exists T.
-      split; assumption.
-    - intuition. destruct H2. exists x. intuition. eapply e_trans. 
-      apply e_sym. eassumption. assumption.
-  Qed.
-
-  Lemma hasType_inversion_sig : forall T U G V,
-    G |-cc TSig T U : V -> 
-    closed 1 (length G) U /\
-    (exists sT : sort, G |-cc T : sT) /\
-    (exists sU : sort, (V == sU) /\ (G ~ T |-cc U *^ ` (length G) : sU)).
-  Proof.
-    intros. remember (TSig T U) as e. induction H; subst; try discriminate.
-    - inversion Heqe. subst. split. assumption. split. exists sT. assumption.
-      exists sU. split. apply e_refl. assumption.
-    - intuition. destruct H5. exists x. intuition. eapply e_trans.
-      apply e_sym. eassumption. assumption.
-  Qed.
-
-  Lemma hasType_inversion_pair : forall t u T G U V,
-    G |-cc (t & u :[T ** U]) : V ->
-    (V == TSig T U) /\
-    (G |-cc t : T) /\
-    (G |-cc u : U *^ t) /\
-    exists s : sort, G |-cc TSig T U : s.
-  Proof.
-    intros. remember (t & u :[T ** U]) as e. 
-    induction H; subst; try discriminate.
-    - inversion Heqe. subst. split. apply e_refl. split. assumption.
-      split. assumption. exists s. assumption.
-    - intuition. eapply e_trans. apply e_sym. eassumption. assumption.
-  Qed.
-
-  Lemma hasType_inversion_fst : forall t G T, 
-    G |-cc tFst t : T ->
-    exists U, G |-cc t : TSig T U.
-  Proof.
-    intros. remember (tFst t) as e. induction H; try discriminate; subst.
-    - inversion Heqe. subst. exists U. assumption.
-    - intuition. destruct H2. exists x. econstructor. eassumption.
-      Fail apply hasType_hasType in H2. 
-  Abort.
-
-  Lemma hasType_inversion_snd : forall t G V,
-    G |-cc tSnd t : V ->
-    exists U, (V == U *^ tFst t) /\
-    exists T, G |-cc t : TSig T U.
-  Proof.
-    intros. remember (tSnd t) as e. induction H; subst; try discriminate.
-    - inversion Heqe. subst. exists U. split. apply e_refl. exists T.
-      assumption.
-    - intuition. destruct H2. exists x. intuition. eapply e_trans; eauto.
-  Qed.
-
-   (* Splicing preserves well-typedness. *)
-  Lemma t_thin : forall e G G' T,
+  (* Splicing preserves well-typedness. *)
+  Lemma t_thin : forall G G' e T,
     G +~ G' |-cc e : T ->
     forall U, G ~ U +~ map (length G +>) G' |-cc ->
     G ~ U +~ map (length G +>) G' |-cc length G +> e : length G +> T.
   Proof.
-    induction e using (well_founded_induction wfR). destruct e; simpl; intros.
-    - destruct s. 
-      + apply hasType_inversion_prop in H0. subst. constructor. assumption.
-      + apply hasType_inversion_type in H0. contradiction.
-    - destruct v.
-      + apply hasType_inversion_varB in H0. contradiction.
-      + apply hasType_inversion_varF in H0. admit.
-    - apply hasType_inversion_all in H0. intuition. destruct H0, H4. intuition.
-      eapply t_conv with (T := length G +> x0). econstructor.
-  Admitted.
+    intros G G'. remember (G +~ G') as GG'. intros e T H. 
+    generalize dependent HeqGG'. generalize dependent G.
+    generalize dependent G'. induction H; intros; subst.
+    - constructor. auto.
+    - constructor; auto. 
+    - simpl. econstructor.
+      + rewrite length_elim_middle. rewrite app_length. rewrite map_length.
+        rewrite <- app_length. apply closed_splice. assumption.
+      + erewrite splice_sort. eauto.
+      + replace ((G0 ~ U0 +~ map (length G0 +>) G') ~ length G0 +> T)
+          with (G0 ~ U0 +~ map (length G0 +>) (G' ~ T)) by reflexivity. 
+        assert (length G0 +> ` (length (G0 +~ G')) 
+                = ` (length (G0 ~ U0 +~ map (length G0 +>) G'))).
+        repeat rewrite app_length. rewrite map_length. simpl.
+        assert (length G0 <=? length G' + length G0 = true).
+        apply Nat.leb_le. lia. rewrite H3. rewrite plus_n_Sm. reflexivity.
+        rewrite <- H3. rewrite <- splice_open. erewrite splice_sort.
+        apply IHhasType2; auto. simpl. econstructor; eauto.
+    - simpl. econstructor.
+      + rewrite length_elim_middle. rewrite app_length in *. 
+        rewrite map_length. rewrite splice_all. apply closed_splice. 
+        assumption.
+      + rewrite length_elim_middle. rewrite app_length in *.
+        rewrite map_length. apply closed_splice. assumption.
+      + erewrite splice_sort. auto.
+      + replace ((G0 ~ U0 +~ map (length G0 +>) G') ~ length G0 +> T)
+          with (G0 ~ U0 +~ map (length G0 +>) (G' ~ T)) by reflexivity. 
+        assert (length G0 +> ` (length (G0 +~ G')) 
+                = ` (length (G0 ~ U0 +~ map (length G0 +>) G'))).
+        repeat rewrite app_length. rewrite map_length. simpl.
+        assert (length G0 <=? length G' + length G0 = true).
+        apply Nat.leb_le. lia. rewrite H4. rewrite plus_n_Sm. reflexivity.
+        rewrite <- H4. repeat rewrite <- splice_open. 
+        apply IHhasType2; eauto. econstructor; eauto.
+    - simpl. rewrite splice_open. 
+      apply t_app with (T := length G0 +> T); eauto.
+    - simpl. econstructor.
+      + rewrite length_elim_middle. rewrite app_length in *.
+        rewrite map_length. apply closed_splice. assumption.
+      + erewrite splice_sort. eauto.
+      + replace ((G0 ~ U0 +~ map (length G0 +>) G') ~ length G0 +> T)
+          with (G0 ~ U0 +~ map (length G0 +>) (G' ~ T)) by reflexivity. 
+        assert (length G0 +> ` (length (G0 +~ G')) 
+                = ` (length (G0 ~ U0 +~ map (length G0 +>) G'))).
+        repeat rewrite app_length. rewrite map_length. simpl.
+        assert (length G0 <=? length G' + length G0 = true).
+        apply Nat.leb_le. lia. rewrite H3. rewrite plus_n_Sm. reflexivity.
+        rewrite <- H3. rewrite <- splice_open. erewrite splice_sort.
+        apply IHhasType2; auto. simpl. econstructor; eauto.
+    - simpl. econstructor; eauto. rewrite <- splice_open. auto.
+    - simpl. apply t_fst with (U := length G0 +> U). rewrite splice_sig.
+      auto.
+    - simpl. rewrite splice_open. apply t_snd with (T := length G0 +> T).
+      rewrite splice_sig. auto.
+    - eapply t_conv with (T := length G0 +> T). auto. erewrite splice_sort.
+      auto. apply e_splice. auto.
+  Qed.
 
   Theorem t_weak : forall G e T, 
     G |-cc e : T ->
@@ -874,15 +779,11 @@ Module CC.
     TSig prop (TSig (TAll T #1) (TAll #1 U)).
 
   Definition TSel (x : expr) := tFst x.
-
-  Definition tTyp (T : expr) := 
-    (T & 
-    (tId & tId :[TAll T T ** TAll T T])
-    :[prop ** TSig (TAll T #1) (TAll #1 T)]).
+  Definition tTyp (T : expr) := (T & (tId & tId)).
 
   (* Coercions for subtyping *)
   Definition SBot (T : expr) := tLam (#0 $ T).
-  Definition STop (T : expr) := tLam (T & #0 :[prop ** #0]).
+  Definition STop (T : expr) := tLam (T & #0).
 
   Definition SAll (T'2T U2U' : expr) :=
     tLam (tLam (U2U' $ (#1 $ (T'2T $ #0)))).
@@ -890,12 +791,10 @@ Module CC.
   Definition SSel1 (x : expr) := tLam ((tFst (tSnd x)) $ #0).
   Definition SSel2 (x : expr) := tLam ((tSnd (tSnd x)) $ #0).
 
-  Definition STyp (T' U' T'2T U2U' : expr) :=
+  Definition STyp (T'2T U2U' : expr) :=
     tLam ((tFst #0) & 
-            ((tLam ((tFst (tSnd #1)) $ (T'2T $ #0))) &
-             (tLam (U2U' $ ((tSnd (tSnd #1)) $ #0)))
-             :[TAll T' (tFst #0) ** TAll (tFst #0) U'])
-          :[prop ** (TSig (TAll T' #0) (TAll #0 U'))]).
+             ((tLam ((tFst (tSnd #1)) $ (T'2T $ #0))) &
+             (tLam (U2U' $ ((tSnd (tSnd #1)) $ #0))))).
 
   Corollary wf_bot : forall G, G |-cc -> G |-cc TBot : prop.
   Proof.
@@ -1040,7 +939,7 @@ Module D.
   Reserved Notation "G |-d T <: U ~> c" 
       (at level 90, T at next level, no associativity).
 
-  Fail Inductive wfCx : cx -> Type :=
+  Inductive wfCx : cx -> Type :=
     | wf_nil : nil |-d
 
     | wf_snoc : forall G T T', 
@@ -1130,7 +1029,7 @@ Module D.
     | s_typ : forall G T1 U1 T2 U2 cT cU,
         G |-d T2 <: T1 ~> cT ->
         G |-d U1 <: U2 ~> cU ->
-        G |-d TTyp T1 U1 <: TTyp T2 U2 ~> CC.STyp T2 U2 cT cU
+        G |-d TTyp T1 U1 <: TTyp T2 U2 ~> CC.STyp cT cU
 
     | s_sel1 : forall G x T U e',
         G |-d `x : TTyp T U ~> e' ->
@@ -1149,86 +1048,14 @@ Module D.
 
     where "G |-d T <: U ~> c" := (subtype G T U c) : d_scope.
 
-  Fixpoint hasType_wfCx {G e T} (eT : G |-d e : T) : G |-d
-    with wfTy_wfCx {G T} (Ts : G |-d T) : G |-d.
-  Proof.
-    * destruct eT; 
-      try assumption;
-      try (eapply hasType_wfCx; eassumption);
-      try (eapply wfTy_wfCx; eassumption).
-  
-    * destruct Ts; try assumption;
-      try (eapply wfTy_wfCx; eassumption);
-      try (eapply hasType_wfCx; eassumption).
-  Qed.
+  (* G |-d e : T ~> e' -> G |-d T ~> T' *)
+  (* To discuss:
+   * 1. Problems with CoC metatheory -- hasType_inversion_prop, 
+        hasType_inversion_fst, t_thin. :(
+   * 2. How do I write the translation? I can do it if I can prove that
+        a. Every precontext typing an expression is a context 
+        b. Every pretype typing an expression is a type mapping to a CC type T
+        (b) is not straightforward. :/ *)
 
-  Fixpoint subtype_wfCx {G T U} (st : G |-d T <: U) : G |-d.
-  Proof.
-    destruct st;
-    try (eapply hasType_wfCx; eassumption);
-    try (eapply wfTy_wfCx; eassumption);
-    try (eapply subtype_wfCx; eassumption).
-  Qed.
 
-  Hint Resolve hasType_wfCx wfTy_wfCx subtype_wfCx : core.
-
-End D.
-
-(***************************************************************************
- * Translation
- * -----------
- * [ ] Presyntax
- * -----------
- * [ ] Presyntax
- * [ ] Type.s
- * [ ] Contexts
- * [ ] Terms
- * [ ] Reduction preservation *)
-
-Module D2CC.
-  Import CC (prop).
-
-Module D2CC.
-  Open Scope d_scope.
-  Open Scope cc_scope.
-
-  Import CC (prop).
-  Coercion CC.TSort : CC.sort >-> CC.expr.
-  Coercion CC.tVar : var >-> CC.expr.
-  Coercion D.tVar : var >-> D.expr.
-
-  Fixpoint d2ccCx {G} (wfG : D.wfCx G) : CC.cx :=
-    match wfG in D.wfCx G with
-    | D.wf_nil => nil
-    | D.wf_snoc _ _ wfG' Ts => d2ccCx wfG' ~ d2ccTy Ts
-    end
-
-    with d2ccTy {G T} (wfT : D.wfTy G T) : CC.expr :=
-    match wfT in D.wfTy G T with
-    | D.wf_bot _ _ => CC.TBot
-    | D.wf_top _ _ => CC.TTop
-    | D.wf_all _ _ _ _ Ts Us => CC.TAll (d2ccTy Ts) (d2ccTy Us)
-    | D.wf_typ _ _ _ Ts Us => CC.TTyp (d2ccTy Ts) (d2ccTy Us)
-    | D.wf_sel _ _ _ _ xTU => CC.tFst (d2ccTm xTU)
-    end
-
-    with d2ccTm {G e T} (eT : D.hasType G e T) : CC.expr :=
-    match eT in D.hasType G e T with
-    | D.t_var _ x _ _ _ => `x
-    | D.t_lam _ _ _ _ _ _ Ts eU => CC.tLam (d2ccTy Ts) (d2ccTm eU)
-    | D.t_app _ _ _ _ _ tTU uT _ | D.t_dapp _ _ _ _ _ tTU uT =>
-        CC.tApp (d2ccTm tTU) (d2ccTm uT)
-    | D.t_typ _ _ Ts => CC.tTyp (d2ccTy Ts)
-    | D.t_sub _ _ _ _ eT st => CC.tApp (d2ccSt st) (d2ccTm eT)
-    end
-
-    with d2ccSt {G T U} (TstU : D.subtype G T U) : CC.expr :=
-    match TstU in D.subtype G T U with
-    | D.s_bot _ _ Ts => CC.SBot (d2ccTy Ts)
-    | D.s_top _ _ Ts => CC.STop (d2ccTy Ts)
-    | _ => prop
-    end.
-
-  Fixpoint d2cc_wfCx {G} (wfG : D.wfCx G) : CC.wfCx (d2ccCx wfG)
-    with d2cc_wfTy {G T} (wfT : D.wfTy G T) 
-    : CC.hasType (d2ccCx wfG) (d2ccExpr wfT)
+End D2CC.
