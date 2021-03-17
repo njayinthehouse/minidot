@@ -1,3 +1,4 @@
+Require Import Compare_dec.
 Require Import EqNat.
 Require Import Equality.
 Require Import List.
@@ -9,6 +10,19 @@ Import Notations.
 Declare Scope var_scope.
 Declare Scope d_scope.
 Declare Scope cc_scope.
+Delimit Scope d_scope with d.
+Delimit Scope cc_scope with cc.
+
+Corollary Nat_lneb_le : forall n m, n <=? m = false -> m < n.
+Proof.
+  intros. destruct (le_lt_dec n m). apply Nat.leb_le in l. rewrite l in H.
+  discriminate. assumption.
+Qed.
+
+Corollary Nat_neq_bneq : forall n m, n <> m -> n =? m = false.
+Proof.
+  intros. destruct (n =? m) eqn:E. apply beq_nat_true in E. lia. auto.
+Qed.
 
 (***************************************************************************
  * Variables and Contexts
@@ -59,6 +73,7 @@ Proof.
   - simpl. constructor. assumption.
 Qed.
 
+(* You cannot look up a variable that is not in the context. *)
 Lemma lookup_fail : forall ty G x (T : ty), 
   x >= length G -> ~ (lookup G x T).
 Proof.
@@ -397,6 +412,47 @@ Module CC.
     end
      where "k -<" := (unsplice k) : cc_scope. *)
 
+  (* Closing *)
+  Fixpoint close (f : fVar) (b : bVar) (e : expr) : expr :=
+    match e with
+    | tVar `x => if f =? x then #b else `x
+    | TAll T U => TAll (close f b T) (close f (S b) U)
+    | tLam t => tLam (close f (S b) t)
+    | t $ u => (close f b t) $ (close f b u)
+    | TSig T U => TSig (close f b T) (close f (S b) U)
+    | t & u => (close f b t) & (close f b u)
+    | tFst t => tFst (close f b t)
+    | tSnd t => tSnd (close f b t)
+    | _ => e
+    end.
+
+  (* Opening with variables and closing are inverses in some cases. *)
+  Lemma open_close : forall b f e,
+    closed b (S f) e -> open (S b) `f (close f (S b) e) = e.
+  Proof.
+    induction 1.
+    all: simpl; try solve [ reflexivity
+                          | rewrite IHclosed1; rewrite IHclosed2; auto
+                          | rewrite IHclosed; auto ].
+    destruct (f =? x) eqn:E; auto; simpl. rewrite <- beq_nat_refl.
+    apply beq_nat_true in E. subst. auto.
+    destruct i; auto. destruct (b =? i) eqn:E; auto. apply beq_nat_true in E.
+    lia.
+  Qed.
+
+  Lemma close_open : forall b f e,
+    closed (S b) f e -> close (S f) b (open b (varF (S f)) e) = e.
+  Proof.
+    intros b f e cle. remember (S b) as Sb. generalize dependent b.
+    induction cle; intros; subst; auto.
+    simpl. destruct x. auto. destruct (f =? x) eqn:E. apply beq_nat_true in E.
+    lia. auto.
+    simpl. destruct (b0 =? i) eqn:E. simpl. rewrite <- beq_nat_refl.
+    apply beq_nat_true in E. subst. auto. auto.
+    1,3,4,5: simpl; try rewrite IHcle1; try rewrite IHcle2; auto.
+    all: simpl; try rewrite IHcle; auto.
+  Qed.
+
   (***************************************************************************
    * Lemmas about splicing and closedness *)
 
@@ -467,6 +523,15 @@ Module CC.
 
   Hint Resolve closed_open : core.
 
+  Lemma closed_close : forall e b f,
+    closed b (S f) e ->
+    closed (S b) f (close f b e).
+  Proof.
+    induction e; simpl; inversion 1; subst; try constructor; eauto.
+    destruct (f =? x) eqn:E. constructor. lia. constructor. 
+    apply beq_nat_false in E. lia.
+  Qed.
+
   (* Opening the bth bound variable of a preterm that is closed under b 
      bound variables does not change the preterm. *)
   Lemma open_closed : forall e b f, 
@@ -528,23 +593,20 @@ Module CC.
     induction e; inversion 1; subst; simpl; 
     try constructor; eauto;
     try apply IHe2; try apply IHe4; try lia; eauto.
-    intros j. destruct (j <=? i) eqn:E.
-    - constructor. lia.
-    - constructor. assert (i < j) by admit (* E *). lia.
-  Admitted.
+    intros j. destruct (j <=? i) eqn:E; constructor; lia.
+    apply IHe. assumption. lia.
+  Qed.
 
   Lemma closed_decrB : forall e b f,
     closed (S b) f e -> forall i, i < b -> closed b f (decrB' i e).
   Proof.
     induction e; inversion 1; subst; simpl; try constructor; auto;
     try apply IHe2; try apply IHe4; try lia; auto.
-    simpl. intros j. destruct (j <=? i) eqn:E.
-    - constructor. destruct b. lia. lia.
-    - assert (i < j). admit (*E*). constructor.
-      destruct (i =? b) eqn:E'. 
-      + apply beq_nat_true in E'. subst. lia.
-      + apply beq_nat_false in E'. lia.
-  Admitted.
+    simpl. intros j. destruct (j <=? i) eqn:E. 
+    constructor. lia. constructor. pose (le_lt_dec j i). destruct s.
+    rewrite <- Nat.leb_le in l. rewrite E in l. discriminate. lia.
+    apply IHe. assumption. lia.
+  Qed.
 
   Lemma closed_splice : forall e b f, 
     closed b f e -> forall k, closed b (S f) (k +> e).
@@ -555,6 +617,33 @@ Module CC.
   
   Hint Rewrite splice_decrB : core.
   Hint Resolve closed_open_front closed_open_middle : core.
+
+  Lemma splice_close : forall e f b k,
+    k +> (close f b e) = close (if k <=? f then S f else f) b (k +> e).
+  Proof.
+    induction e; intros.
+    reflexivity.
+    2-8: simpl.
+    2,4-6: rewrite IHe1; rewrite IHe2; reflexivity.
+    2-4: rewrite IHe; reflexivity.
+    destruct v. reflexivity. simpl.
+    destruct (f =? f0) eqn:E.
+    apply beq_nat_true in E. subst. rewrite <- beq_nat_refl. reflexivity.
+    destruct (k <=? f) eqn:k_lt_f, (k <=? f0) eqn:k_lt_f0; simpl.
+    rewrite k_lt_f0. rewrite E. reflexivity.
+    rewrite k_lt_f0. destruct f0. reflexivity. 
+    assert (f =? f0 = false). 
+    { apply Nat.leb_le in k_lt_f. apply Nat_lneb_le in k_lt_f0. 
+      apply Nat_neq_bneq. lia.  }
+    rewrite H. reflexivity.
+    rewrite k_lt_f0. assert (f =? S f0 = false).
+    { apply Nat_neq_bneq. apply Nat_lneb_le in k_lt_f. 
+      apply Nat.leb_le in k_lt_f0. lia. }
+    rewrite H. reflexivity.
+    rewrite k_lt_f0. rewrite E. reflexivity.
+  Qed.
+    
+    
 
   (**************************************************************************
    * Properties of full beta-pi reduction and equality *)
@@ -663,7 +752,7 @@ Module CC.
       eapply splice_closed. apply wfCx_closed; eauto. inversion H0. auto.
       rewrite H1. constructor. assumption.
       assert (x < length G). eapply lookup_lt. eassumption. 
-      admit (*H1*).
+      destruct (length G <=? x) eqn:E. apply Nat.leb_le in E. lia. auto.
     - inversion H; subst.
       + replace (length G <=? length (G +~ G')) with true.
         replace (S (length (G +~ G'))) 
@@ -672,7 +761,7 @@ Module CC.
         rewrite map_length. reflexivity. rewrite app_length. symmetry.
         rewrite Nat.leb_le. lia.
       + inversion H0. constructor. apply IHG'; eauto.
-  Admitted.
+  Qed.
 
   Hint Resolve lookup_wfCx_splice : core.
 
@@ -877,6 +966,50 @@ Module CC.
 
 End CC.
 
+Inductive empty : Type :=.
+Inductive Squash (X : Type) : Prop := squash : X -> Squash X.
+
+Fixpoint In' {X} (x : X) (xs : list X) : Type :=
+  match xs with
+  | nil => empty
+  | cons x' xs' => (x = x') + (In' x xs')
+  end.
+
+Corollary In'_In : forall X (x : X) xs, In' x xs -> In x xs.
+Proof. 
+  induction xs. inversion 1. simpl. destruct 1. left. symmetry. auto. 
+  right. auto.
+Qed.
+
+Inductive lookup' {ty} : list ty -> fVar -> ty -> Type :=
+  | last' : forall G T, lookup' (G ~ T) (length G) T
+  | prev' : forall G T U x, lookup' G x T -> lookup' (G ~ U) x T.
+
+Corollary lookup'_lookup : forall ty G x (T : ty), 
+  lookup' G x T -> lookup G x T.
+Proof. induction 1. constructor. constructor. assumption. Qed.
+
+Corollary lookup_lookup' : forall ty G x (T : ty),
+  lookup G x T -> Squash (lookup' G x T).
+Proof.
+  induction 1. do 2 constructor. inversion IHlookup. do 2 constructor.
+  assumption.
+Qed.
+
+Corollary lookup_in' : forall ty G x (T : ty), lookup' G x T -> In' T G.
+Proof.
+  induction 1.
+  - left. auto.
+  - right. auto.
+Qed.
+
+Corollary lookup_lt' : forall ty G x (T : ty), lookup' G x T -> x < length G.
+Proof.
+  induction 1.
+  - simpl. lia.
+  - simpl. lia.
+Qed.
+
 Module D.
 
   Inductive expr : Type :=
@@ -884,7 +1017,7 @@ Module D.
     | TTop : expr
     | tVar : var -> expr
     | TAll : expr -> expr -> expr
-    | tLam : expr -> expr -> expr
+    | tLam : expr -> expr
     | tApp : expr -> expr -> expr
     | TTyp : expr -> expr -> expr
     | tTyp : expr -> expr
@@ -897,6 +1030,7 @@ Module D.
   Coercion CC.TSort : CC.sort >-> CC.expr.
   Coercion CC.tVar : var >-> CC.expr.
 
+  Open Scope cc_scope.
   Open Scope d_scope.
 
   Fixpoint open (i : bVar) (x : fVar) (e : expr) : expr :=
@@ -905,7 +1039,7 @@ Module D.
     | TSel #j => TSel (if i =? j then `x else #j)
     | TBot | TTop | tVar `_ | TSel `_ => e
     | TAll T U => TAll (open i x T) (open (S i) x U)
-    | tLam T t => tLam (open i x T) (open (S i) x t)
+    | tLam t => tLam (open (S i) x t)
     | t $ u => (open i x t) $ (open i x u)
     | TTyp T U => TTyp (open i x T) (open i x U)
     | tTyp T => tTyp (open i x T)
@@ -914,15 +1048,14 @@ Module D.
   Notation "{ i :-> x }" := (open i x) : d_scope.
   Notation "e ^^ x" := (open 0 x e) (at level 10) : d_scope.
 
-  Inductive closed (b f : nat) : expr -> Prop :=
+  Inductive closed (b f : nat) : expr -> Type :=
     | cl_bot : closed b f TBot
     | cl_top : closed b f TTop
     | cl_varB : forall i, i < b -> closed b f #i
     | cl_varF : forall x, x < f -> closed b f `x
     | cl_all : forall T U, 
         closed b f T -> closed (S b) f U -> closed b f (TAll T U)
-    | cl_lam : forall T e,
-        closed b f T -> closed (S b) f e -> closed b f (tLam T e)
+    | cl_lam : forall e, closed (S b) f e -> closed b f (tLam e)
     | cl_app : forall e u, 
         closed b f e -> closed b f u -> closed b f (e $ u)
     | cl_typT : forall T U,
@@ -961,8 +1094,8 @@ Module D.
     | wf_all : forall G T U T' U',
         closed 1 (length G) U ->
         G |-d T ~> T' ->
-        G ~ T |-d U ^^ (length G) ~> CC.open 0 U' (` (length G)) ->
-        G |-d TAll T U ~> CC.TAll T' U'
+        G ~ T |-d U ^^ (length G) ~> U' ->
+        G |-d TAll T U ~> CC.TAll T' (CC.close (length G) 0 U')
 
     | wf_typ : forall G T U T' U',
         G |-d T ~> T'->
@@ -978,16 +1111,15 @@ Module D.
     with hasType : cx -> expr -> expr -> CC.expr -> Type :=
     | t_var : forall G x T,
         G |-d ->
-        lookup G x T ->
+        lookup' G x T ->
         G |-d `x : T ~> `x
 
     | t_lam : forall G T e U T' e',
         closed 1 (length G) e ->
         closed 0 (length G) (TAll T U) ->
         G |-d T ~> T' ->
-        G ~ T |-d e ^^ (length G) : U ^^ (length G) ~> 
-            CC.open 0 e' (` (length G)) ->
-        G |-d tLam T e : TAll T U ~> CC.tLam e'
+        G ~ T |-d e ^^ (length G) : U ^^ (length G) ~> e' ->
+        G |-d tLam e : TAll T U ~> CC.tLam (CC.close (length G) 0 e')
 
     | t_app : forall G t u T U t' u' U',
         G |-d t : TAll T U ~> t' ->
@@ -1020,11 +1152,13 @@ Module D.
         G |-d T ~> T' ->
         G |-d T <: TTop ~> CC.STop T'
 
-    | s_all : forall G T1 U1 T2 U2 cT cU U1',
+    | s_all : forall G T1 U1 T2 U2 U1' cT cU,
+        closed 1 (length G) U1 ->
+        closed 1 (length G) U2 ->
         G |-d T2 <: T1 ~> cT ->
+        G ~ T1 |-d U1 ^^ (length G) ~> U1' ->
         G ~ T2 |-d U1 ^^ (length G) <: U2 ^^ (length G) ~> cU ->
-        G ~ T2 |-d U1 ^^ (length G) ~> U1' ->
-        G |-d TAll T1 U1 <: TAll T2 U2 ~> CC.SAll cT cU
+        G |-d TAll T1 U1 <: TAll T2 U2 ~> CC.SAll cT (CC.close (length G) 0 cU)
           
     | s_typ : forall G T1 U1 T2 U2 cT cU,
         G |-d T2 <: T1 ~> cT ->
@@ -1048,14 +1182,317 @@ Module D.
 
     where "G |-d T <: U ~> c" := (subtype G T U c) : d_scope.
 
-  (* G |-d e : T ~> e' -> G |-d T ~> T' *)
-  (* To discuss:
-   * 1. Problems with CoC metatheory -- hasType_inversion_prop, 
-        hasType_inversion_fst, t_thin. :(
-   * 2. How do I write the translation? I can do it if I can prove that
-        a. Every precontext typing an expression is a context 
-        b. Every pretype typing an expression is a type mapping to a CC type T
-        (b) is not straightforward. :/ *)
+  Reserved Notation "k +>" (at level 45).
+  Fixpoint splice (k : nat) (e : expr) : expr :=
+    match e with
+    | tVar `x => varF (if k <=? x then S x else x)
+    | TSel `x => TSel (varF (if k <=? x then S x else x))
+    | TAll T U => TAll (k +> T) (k +> U)
+    | tLam t => tLam (k +> t)
+    | t $ u => (k +> t) $ (k +> u)
+    | TTyp T U => TTyp (k +> T) (k +> U)
+    | tTyp T => tTyp (k +> T)
+    | _ => e
+    end
+    where "k +>" := (splice k) : d_scope.
 
+  Corollary closed_monotonic : forall e b f, 
+    closed b f e ->
+    forall b', b <= b' ->
+    forall f', f <= f' ->
+    closed b' f' e.
+  Proof.
+    induction 1; constructor; eauto; try lia; try apply IHclosed; 
+    try apply IHclosed2; lia.
+  Qed.
 
-End D2CC.
+  Corollary splice_typ : forall T U k, 
+    TTyp (k +> T) (k +> U) = k +> (TTyp T U).
+  Proof. reflexivity. Qed.
+
+  Corollary splice_fVar : forall x k, 
+    tVar (varF (if k <=? x then S x else x)) = k +> `x.
+  Proof. reflexivity. Qed.
+
+  Lemma closed_splice : forall e b f,
+    closed b f e -> forall k, closed b (S f) (k +> e).
+  Proof.
+    induction 1; simpl; constructor; auto; destruct (k <=? x); lia.
+  Qed.
+
+  Lemma splice_closed : forall f e b, closed b f e -> f +> e = e.
+  Proof.
+    induction 1; simpl; auto.
+    1,7: assert (f <=? x = false); destruct (f <=? x) eqn:E; auto; 
+         try apply Nat.leb_le in E; lia.
+    1,3,4: rewrite IHclosed1; rewrite IHclosed2; reflexivity.
+    1,2: rewrite IHclosed; reflexivity.
+  Qed.
+
+  Lemma splice_open : forall e x k i,
+    k +> ({i :-> x} e) = {i :-> if k <=? x then S x else x} (k +> e).
+  Proof.
+    induction e; intros; simpl; auto.
+    1,7: destruct v; simpl; try destruct (i =? b) eqn:E; reflexivity.
+    1,3,4: rewrite IHe1; rewrite IHe2; reflexivity.
+    1-2: rewrite IHe; reflexivity.
+  Qed.
+
+  Lemma closed_open : forall e b f,
+    closed (S b) f e -> 
+    forall x, x < f ->
+    closed b f ({b :-> x} e).
+  Proof.
+    induction e; simpl; inversion 1; subst; try constructor; eauto.
+    all: destruct (b =? i) eqn:E; constructor; try apply beq_nat_false in E;
+    lia.
+  Qed.
+
+  Fixpoint wfTy_closed {G T T'} (wfTT' : G |-d T ~> T') 
+      : closed 0 (length G) T * CC.closed 0 (length G) T'
+
+    with hasType_closed {G e T e'} (eTe' : G |-d e : T ~> e')
+      : closed 0 (length G) e * closed 0 (length G) T * 
+        CC.closed 0 (length G) e'
+
+    with wfCx_closed {G} (wfG : G |-d) 
+      : forall T, In' T G -> closed 0 (length G) T
+
+    with subtype_closed {G T U c} (stTUc : G |-d T <: U ~> c)
+      : closed 0 (length G) T * closed 0 (length G) U * 
+        CC.closed 0 (length G) c.
+  Proof.
+    * destruct wfTT'.
+      - repeat constructor.
+      - repeat constructor.
+      - apply wfTy_closed in wfTT'1. apply wfTy_closed in wfTT'2.
+        repeat constructor; intuition. apply CC.closed_close. assumption.
+      - apply wfTy_closed in wfTT'1. apply wfTy_closed in wfTT'2.
+        repeat constructor; intuition. eapply CC.closed_monotonic.
+        eassumption. lia. lia. eapply CC.closed_monotonic. eassumption.
+        lia. lia.
+      - apply hasType_closed in h; intuition. constructor. inversion a0. 
+        assumption. constructor. assumption.
+
+    * destruct eTe'.
+      - split. split. constructor. eapply lookup_lt'. eassumption. 
+        apply wfCx_closed. assumption. eapply lookup_in'. eassumption.
+        constructor. eapply lookup_lt'. eassumption.
+      - split. split. constructor. assumption. assumption.
+        apply hasType_closed in eTe'. constructor. apply CC.closed_close.
+        intuition.
+      - apply hasType_closed in eTe'1. apply hasType_closed in eTe'2.
+        apply wfTy_closed in w. split. split. constructor; intuition.
+        intuition. constructor; intuition.
+      - apply hasType_closed in eTe'1. apply hasType_closed in eTe'2.
+        split. split. constructor; intuition. intuition.
+        inversion b1. subst. apply closed_open. assumption. inversion a.
+        subst. lia. constructor; intuition.
+      - apply wfTy_closed in w. repeat constructor; intuition.
+        eapply CC.closed_monotonic. eassumption. lia. lia. 
+        eapply CC.closed_monotonic. eassumption. lia. lia.
+      - apply hasType_closed in eTe'. apply subtype_closed in s.
+        split. split; intuition. constructor; intuition.
+
+    * destruct wfG.
+      - destruct 1.
+      - intros. apply closed_monotonic with (b := 0) (f := length G).
+        destruct X. subst. apply wfTy_closed in w. intuition.
+        apply wfCx_closed; assumption. lia. simpl. lia.
+
+    * destruct stTUc.
+      - apply wfTy_closed in w. intuition. constructor. constructor.
+        constructor. constructor. lia. eapply CC.closed_monotonic.
+        eassumption. lia. lia.
+      - apply wfTy_closed in w. intuition. constructor. constructor.
+        constructor. eapply CC.closed_monotonic. eassumption. lia.
+        lia. constructor. lia.
+      - apply subtype_closed in stTUc1. apply subtype_closed in stTUc2.
+        intuition. constructor; assumption. constructor; assumption.
+        constructor. constructor. constructor.
+        apply CC.closed_monotonic with (b := 1) (f := length G).
+        apply CC.closed_close. assumption. lia. lia. constructor.
+        constructor. lia. constructor. eapply CC.closed_monotonic.
+        eassumption. lia. lia. constructor. lia.
+      - apply subtype_closed in stTUc1. apply subtype_closed in stTUc2.
+        intuition; constructor; try eassumption. constructor.
+        constructor. constructor. lia. constructor. constructor. constructor.
+        constructor. constructor. constructor. lia. constructor. 
+        eapply CC.closed_monotonic. eassumption. lia. lia. constructor.
+        lia. constructor. constructor. eapply CC.closed_monotonic.
+        eassumption. lia. lia. constructor. constructor. constructor.
+        constructor. lia. constructor. lia.
+      - apply hasType_closed in h. intuition. inversion b0. subst.
+        assumption. constructor. inversion a0. subst. lia. 
+        repeat constructor. eapply CC.closed_monotonic. eassumption. lia.
+        lia.
+      - apply hasType_closed in h. intuition. constructor. inversion a0.
+        subst. lia. inversion b0. subst. assumption. constructor.
+        constructor. constructor. constructor. eapply CC.closed_monotonic.
+        eassumption. lia. lia. constructor. lia.
+      - apply wfTy_closed in w. intuition. constructor. constructor. lia.
+      - apply subtype_closed in stTUc1. apply subtype_closed in stTUc2.
+        intuition. repeat constructor. eapply CC.closed_monotonic.
+        eassumption. lia. lia. eapply CC.closed_monotonic. eassumption.
+        lia. lia.
+  Qed.
+
+  (* If a preterm (resp. pretype) is a term (resp. type) under precontext G, 
+     then G is a context. *)
+  Fixpoint wfTy_wfCx {G T T'} (wfTT' : G |-d T ~> T') : G |-d
+    with hasType_wfCx {G e T e'} (eTe' : G |-d e : T ~> e') : G |-d.
+  Proof.
+    * destruct wfTT'; try solve [ assumption 
+                                | eapply wfTy_wfCx; eassumption
+                                | eapply hasType_wfCx; eassumption ].
+    * destruct eTe'; try solve [ assumption 
+                               | eapply wfTy_wfCx; eassumption
+                               | eapply hasType_wfCx; eassumption ].
+  Qed.
+
+  Lemma lookup_wfCx_splice : forall G' G x T,
+    lookup (G +~ G') x T ->
+    forall U, G ~ U +~ map (length G +>) G' |-d ->
+    lookup (G ~ U +~ map (length G +>) G')
+        (if length G <=? x then S x else x) (length G +> T).
+  Proof.
+    induction G'; simpl; intros.
+    - replace (length G <=? x) with false.
+      assert (length G +> T = T). eapply splice_closed.
+  Admitted.
+
+  Fixpoint wf_thin
+    {G G' T T'} (wfTT' : G +~ G' |-d T ~> T')
+    {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-d)
+    : G ~ U +~ map (length G +>) G' |-d length G +> T ~> 
+        CC.splice (length G) T'
+
+    with t_thin 
+    {G G' e T e'} (eTe' : G +~ G' |-d e : T ~> e')
+    {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-d) 
+    : G ~ U +~ map (length G +>) G' |-d length G +> e : length G +> T ~>
+        CC.splice (length G) e'.
+  Proof.
+    all: remember (G +~ G') as GG'.
+
+    * destruct wfTT'; subst; simpl.
+      - constructor. assumption.
+      - constructor. assumption.
+      - rewrite CC.splice_close. 
+        replace (length G <=? length (G +~ G')) with true.
+        replace (S (length (G +~ G'))) 
+          with (length (G ~ U +~ map (length G +>) G')).
+        constructor. rewrite length_elim_middle. apply closed_splice.
+        rewrite app_length in *. rewrite map_length. assumption.
+        apply wf_thin; assumption.
+        replace ((G ~ U +~ map (length G +>) G') ~ length G +> T)
+          with (G ~ U +~ map (length G +>) (G' ~ T)).
+        replace (length (G ~ U +~ map (length G +>) G'))
+          with (if length G <=? length (G +~ G') 
+                then (S (length (G +~ G')))
+                else length (G +~ G')).
+        rewrite <- splice_open.
+        apply wf_thin. assumption. simpl. econstructor.
+        assumption. apply wf_thin; eassumption.
+        replace (length G <=? length (G +~ G')) with true.
+        symmetry. rewrite length_elim_middle. repeat rewrite app_length.
+        rewrite map_length. reflexivity. symmetry. apply Nat.leb_le.
+        rewrite app_length. lia. reflexivity. rewrite length_elim_middle.
+        repeat rewrite app_length. rewrite map_length. reflexivity.
+        symmetry. rewrite app_length. apply Nat.leb_le. lia.
+      - constructor; apply wf_thin; assumption.
+      - apply wf_sel with (T := length G +> T) (U := length G +> U0).
+        rewrite splice_typ. rewrite splice_fVar. apply t_thin; assumption.
+
+    * destruct eTe'; subst.
+      - constructor. assumption. admit.
+      - simpl. rewrite CC.splice_close. 
+        replace (length G <=? length (G +~ G')) with true. 
+        assert (S (length (G +~ G')) = length (G ~ U +~ map (length G +>) G')).
+        repeat rewrite app_length. rewrite map_length. simpl. lia.
+        rewrite H. apply t_lam with (T' := CC.splice (length G) T');
+        try rewrite <- H. apply closed_splice. assumption. inversion c0. 
+        subst. constructor; apply closed_splice; assumption.
+        apply wf_thin. assumption. assumption. admit. rewrite app_length.
+        symmetry. rewrite Nat.leb_le. lia.
+      - simpl.
+
+  (* If an expression is well-typed as T under context G, then T is a type 
+     under G. *)
+  Fixpoint hasType_wfTy {G e T e'} (eTe' : G |-d e : T ~> e')
+    : sigT (fun T' => G |-d T ~> T')
+
+    with subtype_wfTy {G T U c} (stTUc : G |-d T <: U ~> c)
+    : sigT (fun T' => G |-d T ~> T') * sigT (fun U' => G |-d U ~> U')
+
+    with wfCx_wfTy {G} (wfG : G |-d)
+    : forall T, In T G -> sigT (fun T' => G |-d T ~> T').
+  Proof.
+    * destruct eTe'.
+      - apply wfCx_wfTy. assumption. eapply lookup_in. eassumption.
+      - apply hasType_wfTy in eTe'. destruct eTe'. inversion c0. subst.
+        do 2 econstructor. assumption. eassumption. eassumption.
+      - econstructor. eassumption.
+      - apply hasType_wfTy in eTe'1. destruct eTe'1. inversion w. subst.
+        admit (* Substitution lemma. *).
+      - econstructor. econstructor; eassumption.
+      - apply subtype_wfTy in s. intuition.
+
+    * destruct stTUc; split.
+      1,4: do 2 econstructor; eapply wfTy_wfCx; eassumption.
+      1-2,11-12: econstructor; eassumption.
+      1-4: eapply subtype_wfTy in stTUc1; eapply subtype_wfTy in stTUc2;
+           intuition; destruct a; destruct b; destruct a0; destruct b0;
+           do 2 econstructor; eassumption.
+      1,4: eapply hasType_wfTy in h; destruct h; inversion w; subst;
+           econstructor; eassumption.
+      1-2: do 2 econstructor; eassumption.
+      1-2: eapply subtype_wfTy in stTUc1; eapply subtype_wfTy in stTUc2;
+           intuition.
+
+    * destruct wfG.
+      - admit.
+      - intros. assert ((T0 = T) + (In T0 G)). 
+        admit (* I need In to live in Type. If that's the case, I need 
+        lookup to also live in Type, to use lookup_in, which also needs
+        defining. *). 
+        destruct H0. subst. econstructor. admit (* Need weakening here *).
+        pose (wfCx_wfTy _ wfG _ i). destruct s. econstructor.
+        admit (* Need weakening *).
+  Admitted.
+      
+  Fixpoint d2ccCx {G} (wfG : G |-d) : CC.cx :=
+    match wfG in G |-d with
+    | wf_nil => nil
+    | wf_snoc _ _ T' wfG' _ => (d2ccCx wfG') ~ T'
+    end.
+
+  Definition d2ccTy {G T T'} (_ : G |-d T ~> T') : CC.expr := T'.
+  Definition d2ccTm {G e T e'} (_ : G |-d e : T ~> e') : CC.expr := e'.
+
+  Fixpoint d2cc_wfCx {G} (wfG : G |-d) : CC.wfCx (d2ccCx wfG)
+
+    with d2cc_wfTy {G T T'} (wfT : G |-d T ~> T') 
+    : let G' := d2ccCx (wfTy_wfCx wfT) in
+      CC.hasType G' T' CC.prop
+
+    with d2cc_hasType {G e T e'} (eTe' : G |-d e : T ~> e')
+    : let G' := d2ccCx (hasType_wfCx eTe') in
+      let T' := projT1 (hasType_wfTy eTe') in
+      CC.hasType G' e' T'.
+  Proof.
+    * destruct wfG.
+      - constructor.
+      - simpl. apply CC.wf_snoc with (s := CC.prop). apply d2cc_wfCx.
+        pose (d2cc_wfTy G T T' w). assert (wfG = wfTy_wfCx w). 
+        admit (* Irrelevance *). rewrite H. assumption.
+
+    * 
+    * admit.
+  Admitted.
+
+End D.
+
+(* TODO: Translate G |- e : T ~> G' |- e' : T' directly, see if it works
+   Create paper draft, check scala symposium latex template
+ *)
