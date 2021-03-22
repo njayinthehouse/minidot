@@ -928,9 +928,9 @@ Module CC.
          eauto.
   Qed.
   
-  Corollary wf_sel : forall G T U x,
-    G |-cc tVar x : TTyp T U ->
-    G |-cc TSel x : prop.
+  Corollary wf_sel : forall G T U e,
+    G |-cc e : TTyp T U ->
+    G |-cc TSel e : prop.
   Proof.
     econstructor. eassumption.
   Qed.
@@ -1075,7 +1075,7 @@ Module D.
   Inductive wfCx : cx -> Type :=
     | wf_nil : nil |-d
 
-    | wf_snoc : forall G T T', 
+    | wf_snoc : forall {G T T'}, 
         G |-d -> 
         G |-d T ~> T' -> 
         G ~ T |-d
@@ -1083,21 +1083,21 @@ Module D.
     where "G |-d" := (wfCx G) : d_scope
 
     with wfTy : cx -> expr -> CC.expr -> Type :=
-    | wf_bot : forall G, 
+    | wf_bot : forall {G}, 
         G |-d -> 
         G |-d TBot ~> CC.TBot
 
-    | wf_top : forall G,
+    | wf_top : forall {G},
         G |-d ->
         G |-d TTop ~> CC.TTop
 
-    | wf_all : forall G T U T' U',
+    | wf_all : forall {G T U T' U'},
         closed 1 (length G) U ->
         G |-d T ~> T' ->
         G ~ T |-d U ^^ (length G) ~> U' ->
         G |-d TAll T U ~> CC.TAll T' (CC.close (length G) 0 U')
 
-    | wf_typ : forall G T U T' U',
+    | wf_typ : forall {G T U T' U'},
         G |-d T ~> T'->
         G |-d U ~> U' ->
         G |-d TTyp T U ~> CC.TTyp T' U'
@@ -1350,10 +1350,10 @@ Module D.
                                | eapply hasType_wfCx; eassumption ].
   Qed.
 
-  Lemma lookup_wfCx_splice : forall G' G x T,
-    lookup (G +~ G') x T ->
+  Lemma lookup_wfCx_splice' : forall G' G x T,
+    lookup' (G +~ G') x T ->
     forall U, G ~ U +~ map (length G +>) G' |-d ->
-    lookup (G ~ U +~ map (length G +>) G')
+    lookup' (G ~ U +~ map (length G +>) G')
         (if length G <=? x then S x else x) (length G +> T).
   Proof.
     induction G'; simpl; intros.
@@ -1405,17 +1405,42 @@ Module D.
         rewrite splice_typ. rewrite splice_fVar. apply t_thin; assumption.
 
     * destruct eTe'; subst.
-      - constructor. assumption. admit.
-      - simpl. rewrite CC.splice_close. 
-        replace (length G <=? length (G +~ G')) with true. 
-        assert (S (length (G +~ G')) = length (G ~ U +~ map (length G +>) G')).
-        repeat rewrite app_length. rewrite map_length. simpl. lia.
-        rewrite H. apply t_lam with (T' := CC.splice (length G) T');
-        try rewrite <- H. apply closed_splice. assumption. inversion c0. 
-        subst. constructor; apply closed_splice; assumption.
-        apply wf_thin. assumption. assumption. admit. rewrite app_length.
-        symmetry. rewrite Nat.leb_le. lia.
-      - simpl.
+      - constructor. assumption. apply lookup_wfCx_splice'; assumption.
+      - admit.
+      - admit.
+      - admit.
+      - admit.
+      - admit.
+  Admitted.
+
+  Definition t_weak 
+    {G e T e'} (eTe' : G |-d e : T ~> e') 
+    {U} (wfGU : G ~ U |-d)
+    : G ~ U |-d e : T ~> e'.
+  Proof.
+    assert ((length G +> e = e) * (length G +> T = T) * 
+            (CC.splice (length G) e' = e')).
+    apply hasType_closed in eTe'. split. 
+    split; apply splice_closed with (b := 0); intuition.
+    apply CC.splice_closed with (b := 0). intuition.
+    assert (G ~ U = G ~ U +~ (map (length G +>) nil)) by reflexivity.
+    intuition. rewrite <- a0. rewrite <- b0. rewrite <- b. rewrite H0.
+    apply t_thin; eassumption.
+  Qed.
+
+  Definition wf_weak
+    {G T T'} (wfTT' : G |-d T ~> T')
+    {U} (wfGU : G ~ U |-d)
+    : G ~ U |-d T ~> T'.
+  Proof.
+    apply wfTy_closed in wfTT' as H.
+    assert (length G +> T = T). apply splice_closed with (b := 0). intuition.
+    assert (CC.splice (length G) T' = T').
+    apply CC.splice_closed with (b := 0). intuition.
+    assert (G ~ U = G ~ U +~ map (length G +>) nil) by reflexivity.
+    rewrite <- H0. rewrite <- H1. rewrite H2.
+    apply wf_thin; eassumption.
+  Qed.
 
   (* If an expression is well-typed as T under context G, then T is a type 
      under G. *)
@@ -1426,15 +1451,15 @@ Module D.
     : sigT (fun T' => G |-d T ~> T') * sigT (fun U' => G |-d U ~> U')
 
     with wfCx_wfTy {G} (wfG : G |-d)
-    : forall T, In T G -> sigT (fun T' => G |-d T ~> T').
+    : forall T, In' T G -> sigT (fun T' => G |-d T ~> T').
   Proof.
     * destruct eTe'.
-      - apply wfCx_wfTy. assumption. eapply lookup_in. eassumption.
+      - apply wfCx_wfTy. assumption. eapply lookup_in'. eassumption.
       - apply hasType_wfTy in eTe'. destruct eTe'. inversion c0. subst.
         do 2 econstructor. assumption. eassumption. eassumption.
       - econstructor. eassumption.
       - apply hasType_wfTy in eTe'1. destruct eTe'1. inversion w. subst.
-        admit (* Substitution lemma. *).
+        admit (* Substitution lemma *).
       - econstructor. econstructor; eassumption.
       - apply subtype_wfTy in s. intuition.
 
@@ -1450,49 +1475,37 @@ Module D.
       1-2: eapply subtype_wfTy in stTUc1; eapply subtype_wfTy in stTUc2;
            intuition.
 
-    * destruct wfG.
-      - admit.
-      - intros. assert ((T0 = T) + (In T0 G)). 
-        admit (* I need In to live in Type. If that's the case, I need 
-        lookup to also live in Type, to use lookup_in, which also needs
-        defining. *). 
-        destruct H0. subst. econstructor. admit (* Need weakening here *).
-        pose (wfCx_wfTy _ wfG _ i). destruct s. econstructor.
-        admit (* Need weakening *).
   Admitted.
-      
-  Fixpoint d2ccCx {G} (wfG : G |-d) : CC.cx :=
-    match wfG in G |-d with
-    | wf_nil => nil
-    | wf_snoc _ _ T' wfG' _ => (d2ccCx wfG') ~ T'
-    end.
 
-  Definition d2ccTy {G T T'} (_ : G |-d T ~> T') : CC.expr := T'.
-  Definition d2ccTm {G e T e'} (_ : G |-d e : T ~> e') : CC.expr := e'.
+  Search "proj".
 
-  Fixpoint d2cc_wfCx {G} (wfG : G |-d) : CC.wfCx (d2ccCx wfG)
+  Fixpoint d2cc_wfCx 
+    {G} (wfG : G |-d) 
+    : sig (fun G' => CC.wfCx G')
 
-    with d2cc_wfTy {G T T'} (wfT : G |-d T ~> T') 
-    : let G' := d2ccCx (wfTy_wfCx wfT) in
-      CC.hasType G' T' CC.prop
+    with d2cc_wfTy
+    {G T T'} (wfTT' : G |-d T ~> T')
+    : sig (fun G' => CC.hasType G' T' CC.prop)
 
-    with d2cc_hasType {G e T e'} (eTe' : G |-d e : T ~> e')
-    : let G' := d2ccCx (hasType_wfCx eTe') in
-      let T' := projT1 (hasType_wfTy eTe') in
-      CC.hasType G' e' T'.
+    with d2cc_hasType
+    {G e T e'} (eTe' : G |-d e : T ~> e')
+    : sigT (fun T' => 
+        (G |-d T ~> T') * 
+        (sig (fun G' => CC.hasType G' e' T'))).
   Proof.
     * destruct wfG.
-      - constructor.
-      - simpl. apply CC.wf_snoc with (s := CC.prop). apply d2cc_wfCx.
-        pose (d2cc_wfTy G T T' w). assert (wfG = wfTy_wfCx w). 
-        admit (* Irrelevance *). rewrite H. assumption.
-
-    * 
-    * admit.
-  Admitted.
+      - (* wf_nil *) exists nil. constructor.
+      - (* wf_snoc wfG w *) apply d2cc_wfCx in wfG. apply d2cc_wfTy in w.
+        exists (proj1_sig wfG ~ T'). econstructor. exact (proj2_sig wfG).
+  Abort (* proj1_sig wfg = proj1_sig w *).
 
 End D.
 
-(* TODO: Translate G |- e : T ~> G' |- e' : T' directly, see if it works
-   Create paper draft, check scala symposium latex template
+(* 
+  TODO: 
+   1. I seem to need some sort of proof degeneracy theorem. It's not
+      proof irrelevance, because it depends on the shape of the proof. 
+      For contexts, it might just be that all proofs of G |-d are equal.
+   2. Finish thinning, *_wfTy lemmas. The latter might help you in admitA.
+   3. 
  *)
