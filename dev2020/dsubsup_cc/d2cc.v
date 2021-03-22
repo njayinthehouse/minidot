@@ -1048,7 +1048,7 @@ Module D.
   Notation "{ i :-> x }" := (open i x) : d_scope.
   Notation "e ^^ x" := (open 0 x e) (at level 10) : d_scope.
 
-  Inductive closed (b f : nat) : expr -> Type :=
+  Inductive closed (b f : nat) : expr -> Prop :=
     | cl_bot : closed b f TBot
     | cl_top : closed b f TTop
     | cl_varB : forall i, i < b -> closed b f #i
@@ -1072,7 +1072,7 @@ Module D.
   Reserved Notation "G |-d T <: U ~> c" 
       (at level 90, T at next level, no associativity).
 
-  Inductive wfCx : cx -> Type :=
+  Inductive wfCx : cx -> Prop :=
     | wf_nil : nil |-d
 
     | wf_snoc : forall {G T T'}, 
@@ -1082,7 +1082,7 @@ Module D.
 
     where "G |-d" := (wfCx G) : d_scope
 
-    with wfTy : cx -> expr -> CC.expr -> Type :=
+    with wfTy : cx -> expr -> CC.expr -> Prop :=
     | wf_bot : forall {G}, 
         G |-d -> 
         G |-d TBot ~> CC.TBot
@@ -1108,10 +1108,10 @@ Module D.
 
     where "G |-d T ~> T'" := (wfTy G T T') : d_scope
 
-    with hasType : cx -> expr -> expr -> CC.expr -> Type :=
+    with hasType : cx -> expr -> expr -> CC.expr -> Prop :=
     | t_var : forall G x T,
         G |-d ->
-        lookup' G x T ->
+        lookup G x T ->
         G |-d `x : T ~> `x
 
     | t_lam : forall G T e U T' e',
@@ -1143,7 +1143,7 @@ Module D.
           
     where "G |-d e : T ~> T'" := (hasType G e T T') : d_scope
 
-    with subtype : cx -> expr -> expr -> CC.expr -> Type :=
+    with subtype : cx -> expr -> expr -> CC.expr -> Prop :=
     | s_bot : forall G T T', 
         G |-d T ~> T' ->
         G |-d TBot <: T ~> CC.SBot T'
@@ -1249,17 +1249,17 @@ Module D.
   Qed.
 
   Fixpoint wfTy_closed {G T T'} (wfTT' : G |-d T ~> T') 
-      : closed 0 (length G) T * CC.closed 0 (length G) T'
+      : closed 0 (length G) T /\ CC.closed 0 (length G) T'
 
     with hasType_closed {G e T e'} (eTe' : G |-d e : T ~> e')
-      : closed 0 (length G) e * closed 0 (length G) T * 
+      : closed 0 (length G) e /\ closed 0 (length G) T /\
         CC.closed 0 (length G) e'
 
     with wfCx_closed {G} (wfG : G |-d) 
-      : forall T, In' T G -> closed 0 (length G) T
+      : forall T, In T G -> closed 0 (length G) T
 
     with subtype_closed {G T U c} (stTUc : G |-d T <: U ~> c)
-      : closed 0 (length G) T * closed 0 (length G) U * 
+      : closed 0 (length G) T /\ closed 0 (length G) U /\
         CC.closed 0 (length G) c.
   Proof.
     * destruct wfTT'.
@@ -1271,40 +1271,40 @@ Module D.
         repeat constructor; intuition. eapply CC.closed_monotonic.
         eassumption. lia. lia. eapply CC.closed_monotonic. eassumption.
         lia. lia.
-      - apply hasType_closed in h; intuition. constructor. inversion a0. 
+      - apply hasType_closed in H; intuition. constructor. inversion H0.
         assumption. constructor. assumption.
 
     * destruct eTe'.
-      - split. split. constructor. eapply lookup_lt'. eassumption. 
-        apply wfCx_closed. assumption. eapply lookup_in'. eassumption.
-        constructor. eapply lookup_lt'. eassumption.
-      - split. split. constructor. assumption. assumption.
+      - split. constructor. eapply lookup_lt. eassumption. split.
+        apply wfCx_closed. assumption. eapply lookup_in. eassumption.
+        constructor. eapply lookup_lt. eassumption.
+      - split. constructor. assumption. split. assumption.
         apply hasType_closed in eTe'. constructor. apply CC.closed_close.
         intuition.
       - apply hasType_closed in eTe'1. apply hasType_closed in eTe'2.
-        apply wfTy_closed in w. split. split. constructor; intuition.
+        apply wfTy_closed in H. split. constructor; intuition.
         intuition. constructor; intuition.
       - apply hasType_closed in eTe'1. apply hasType_closed in eTe'2.
-        split. split. constructor; intuition. intuition.
-        inversion b1. subst. apply closed_open. assumption. inversion a.
+        split. constructor; intuition. intuition.
+        inversion H3. subst. apply closed_open. assumption. inversion H1.
         subst. lia. constructor; intuition.
-      - apply wfTy_closed in w. repeat constructor; intuition.
+      - apply wfTy_closed in H. repeat constructor; intuition.
         eapply CC.closed_monotonic. eassumption. lia. lia. 
         eapply CC.closed_monotonic. eassumption. lia. lia.
-      - apply hasType_closed in eTe'. apply subtype_closed in s.
-        split. split; intuition. constructor; intuition.
+      - apply hasType_closed in eTe'. apply subtype_closed in H.
+        intuition. constructor; intuition.
 
     * destruct wfG.
       - destruct 1.
       - intros. apply closed_monotonic with (b := 0) (f := length G).
-        destruct X. subst. apply wfTy_closed in w. intuition.
+        destruct H0. subst. apply wfTy_closed in H. intuition.
         apply wfCx_closed; assumption. lia. simpl. lia.
 
     * destruct stTUc.
-      - apply wfTy_closed in w. intuition. constructor. constructor.
+      - apply wfTy_closed in H. intuition. constructor. constructor.
         constructor. constructor. lia. eapply CC.closed_monotonic.
         eassumption. lia. lia.
-      - apply wfTy_closed in w. intuition. constructor. constructor.
+      - apply wfTy_closed in H. intuition. constructor. constructor.
         constructor. eapply CC.closed_monotonic. eassumption. lia.
         lia. constructor. lia.
       - apply subtype_closed in stTUc1. apply subtype_closed in stTUc2.
@@ -1322,15 +1322,15 @@ Module D.
         lia. constructor. constructor. eapply CC.closed_monotonic.
         eassumption. lia. lia. constructor. constructor. constructor.
         constructor. lia. constructor. lia.
-      - apply hasType_closed in h. intuition. inversion b0. subst.
-        assumption. constructor. inversion a0. subst. lia. 
+      - apply hasType_closed in H. intuition. inversion H. subst.
+        assumption. constructor. inversion H0. subst. lia. 
         repeat constructor. eapply CC.closed_monotonic. eassumption. lia.
         lia.
-      - apply hasType_closed in h. intuition. constructor. inversion a0.
-        subst. lia. inversion b0. subst. assumption. constructor.
+      - apply hasType_closed in H. intuition. constructor. inversion H0.
+        subst. lia. inversion H. subst. assumption. constructor.
         constructor. constructor. constructor. eapply CC.closed_monotonic.
         eassumption. lia. lia. constructor. lia.
-      - apply wfTy_closed in w. intuition. constructor. constructor. lia.
+      - apply wfTy_closed in H. intuition. constructor. constructor. lia.
       - apply subtype_closed in stTUc1. apply subtype_closed in stTUc2.
         intuition. repeat constructor. eapply CC.closed_monotonic.
         eassumption. lia. lia. eapply CC.closed_monotonic. eassumption.
@@ -1350,10 +1350,10 @@ Module D.
                                | eapply hasType_wfCx; eassumption ].
   Qed.
 
-  Lemma lookup_wfCx_splice' : forall G' G x T,
-    lookup' (G +~ G') x T ->
+  Lemma lookup_wfCx_splice : forall G' G x T,
+    lookup (G +~ G') x T ->
     forall U, G ~ U +~ map (length G +>) G' |-d ->
-    lookup' (G ~ U +~ map (length G +>) G')
+    lookup (G ~ U +~ map (length G +>) G')
         (if length G <=? x then S x else x) (length G +> T).
   Proof.
     induction G'; simpl; intros.
@@ -1405,7 +1405,7 @@ Module D.
         rewrite splice_typ. rewrite splice_fVar. apply t_thin; assumption.
 
     * destruct eTe'; subst.
-      - constructor. assumption. apply lookup_wfCx_splice'; assumption.
+      - constructor. assumption. apply lookup_wfCx_splice; assumption.
       - admit.
       - admit.
       - admit.
@@ -1442,62 +1442,47 @@ Module D.
     apply wf_thin; eassumption.
   Qed.
 
-  (* If an expression is well-typed as T under context G, then T is a type 
-     under G. *)
-  Fixpoint hasType_wfTy {G e T e'} (eTe' : G |-d e : T ~> e')
-    : sigT (fun T' => G |-d T ~> T')
+  Search "exists_".
 
-    with subtype_wfTy {G T U c} (stTUc : G |-d T <: U ~> c)
-    : sigT (fun T' => G |-d T ~> T') * sigT (fun U' => G |-d U ~> U')
+  Fail Fixpoint d2ccCx {G} (wfG : G |-d) : CC.cx :=
+    match wfG in G |-d with
+    | wf_nil => nil
+    | @wf_snoc _ _ T' wfG0 _ => d2ccCx wfG0 ~ T'
+    end.
 
-    with wfCx_wfTy {G} (wfG : G |-d)
-    : forall T, In' T G -> sigT (fun T' => G |-d T ~> T').
-  Proof.
-    * destruct eTe'.
-      - apply wfCx_wfTy. assumption. eapply lookup_in'. eassumption.
-      - apply hasType_wfTy in eTe'. destruct eTe'. inversion c0. subst.
-        do 2 econstructor. assumption. eassumption. eassumption.
-      - econstructor. eassumption.
-      - apply hasType_wfTy in eTe'1. destruct eTe'1. inversion w. subst.
-        admit (* Substitution lemma *).
-      - econstructor. econstructor; eassumption.
-      - apply subtype_wfTy in s. intuition.
-
-    * destruct stTUc; split.
-      1,4: do 2 econstructor; eapply wfTy_wfCx; eassumption.
-      1-2,11-12: econstructor; eassumption.
-      1-4: eapply subtype_wfTy in stTUc1; eapply subtype_wfTy in stTUc2;
-           intuition; destruct a; destruct b; destruct a0; destruct b0;
-           do 2 econstructor; eassumption.
-      1,4: eapply hasType_wfTy in h; destruct h; inversion w; subst;
-           econstructor; eassumption.
-      1-2: do 2 econstructor; eassumption.
-      1-2: eapply subtype_wfTy in stTUc1; eapply subtype_wfTy in stTUc2;
-           intuition.
-
-  Admitted.
-
-  Search "proj".
+  (* We need the above to specify the type signature of the wfCx translation*)
 
   Fixpoint d2cc_wfCx 
     {G} (wfG : G |-d) 
-    : sig (fun G' => CC.wfCx G')
+    : exists G', CC.wfCx G' /\ length G = length G'
 
     with d2cc_wfTy
     {G T T'} (wfTT' : G |-d T ~> T')
-    : sig (fun G' => CC.hasType G' T' CC.prop)
+    : exists G', CC.hasType G' T' CC.prop /\ length G = length G'
 
     with d2cc_hasType
     {G e T e'} (eTe' : G |-d e : T ~> e')
-    : sigT (fun T' => 
-        (G |-d T ~> T') * 
-        (sig (fun G' => CC.hasType G' e' T'))).
+    : exists T', (G |-d T ~> T') /\
+      (exists G', CC.hasType G' e' T' /\ length G = length G').
   Proof.
     * destruct wfG.
-      - (* wf_nil *) exists nil. constructor.
-      - (* wf_snoc wfG w *) apply d2cc_wfCx in wfG. apply d2cc_wfTy in w.
-        exists (proj1_sig wfG ~ T'). econstructor. exact (proj2_sig wfG).
-  Abort (* proj1_sig wfg = proj1_sig w *).
+      - exists nil. split; constructor.
+      - apply d2cc_wfCx in wfG. apply d2cc_wfTy in H. destruct H. 
+        exists (x ~ T'). split. econstructor. intuition.
+        eapply CC.hasType_wfCx. eassumption. intuition. eassumption.
+        intuition. simpl. lia.
+
+    * destruct wfTT'.
+      - apply d2cc_wfCx in H. destruct H. exists x. intuition.
+        apply CC.wf_bot. eassumption.
+      - apply d2cc_wfCx in H. destruct H. exists x. intuition. 
+        apply CC.wf_top. eassumption.
+      - (* Problematic *) apply wfTy_wfCx in wfTT'1 as H1. 
+        apply d2cc_wfCx in H1. destruct H1. exists x. econstructor.
+        intuition. rewrite H2. econstructor. apply CC.closed_close.
+        apply wfTy_closed in wfTT'2. simpl in wfTT'2. rewrite H2 in wfTT'2.
+        intuition. apply d2cc_wfTy in wfTT'1. destruct wfTT'1.
+        destruct H0. Abort (* x = x0 *).
 
 End D.
 
