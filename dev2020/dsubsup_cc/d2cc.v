@@ -1353,6 +1353,26 @@ Module D.
          | eapply hasType_wfCx; eassumption].
   Qed.
 
+  Definition Cx (_ : cx) G' := CC.wfCx G'.
+  Definition Ty (_ : cx) (_ : expr) T' :=
+    exists G', CC.wfCx G' /\ CC.hasType G' T' CC.prop.
+  Definition Tm G (_ : expr) T e' := 
+    exists G' T', CC.wfCx G' /\ (G |-d T ~> T') 
+        /\ CC.hasType G' T' CC.prop /\ CC.hasType G' e' T'.
+  Definition Sub G T U c :=
+    exists G' T' U', CC.wfCx G' /\ (CC.hasType G' c (CC.TAll T' U'))
+        /\ (G |-d T ~> T') /\ CC.hasType G' T' CC.prop
+        /\ (G |-d U ~> U') /\ CC.hasType G' U' CC.prop.
+
+  (* Preservation *)
+  Fixpoint t_Cx {G G'} (wfGG' : G |-d ~> G') : Cx G G'
+    with t_Ty {G T T'} (wfTT' : G |-d T ~> T') : Ty G T T'
+    with t_Tm {G e T e'} (eTe' : G |-d e : T ~> e') : Tm G e T e'.
+  Proof.
+    * destruct wfGG'. 
+      - constructor.
+      - econstructor. eapply t_Cx. eassumption. apply t_Ty in H.
+        destruct H. Abort.
   
 
 End D.
