@@ -428,7 +428,7 @@ Module CC.
 
   (* Opening with variables and closing are inverses in some cases. *)
   Lemma open_close : forall b f e,
-    closed b (S f) e -> open (S b) `f (close f (S b) e) = e.
+    closed b (S f) e -> open b `f (close f b e) = e.
   Proof.
     induction 1.
     all: simpl; try solve [ reflexivity
@@ -436,16 +436,15 @@ Module CC.
                           | rewrite IHclosed; auto ].
     destruct (f =? x) eqn:E; auto; simpl. rewrite <- beq_nat_refl.
     apply beq_nat_true in E. subst. auto.
-    destruct i; auto. destruct (b =? i) eqn:E; auto. apply beq_nat_true in E.
-    lia.
+    destruct (b =? i) eqn:E. apply beq_nat_true in E. lia. auto.
   Qed.
 
   Lemma close_open : forall b f e,
-    closed (S b) f e -> close (S f) b (open b (varF (S f)) e) = e.
+    closed (S b) f e -> close f b (open b (varF f) e) = e.
   Proof.
     intros b f e cle. remember (S b) as Sb. generalize dependent b.
     induction cle; intros; subst; auto.
-    simpl. destruct x. auto. destruct (f =? x) eqn:E. apply beq_nat_true in E.
+    simpl. destruct (f =? x) eqn:E. apply beq_nat_true in E.
     lia. auto.
     simpl. destruct (b0 =? i) eqn:E. simpl. rewrite <- beq_nat_refl.
     apply beq_nat_true in E. subst. auto. auto.
@@ -1121,10 +1120,10 @@ Module D.
         G ~ T |-d e ^^ (length G) : U ^^ (length G) ~> e' ->
         G |-d tLam e : TAll T U ~> CC.tLam (CC.close (length G) 0 e')
 
-    | t_app : forall {G t u T U t' u' U'},
+    | t_app : forall {G t u T U t' u'},
+        closed 0 (length G) U ->
         G |-d t : TAll T U ~> t' ->
         G |-d u : T ~> u' ->
-        G |-d U ~> U' ->
         G |-d t $ u : U ~> CC.tApp t' u'
 
     | t_dapp : forall {G t x T U t' e'},
@@ -1134,7 +1133,7 @@ Module D.
 
     | t_typ : forall {G T T'},
         G |-d T ~> T' ->
-        G |-d tTyp T : TTyp T T ~> CC.TTyp T' T'
+        G |-d tTyp T : TTyp T T ~> CC.tTyp T'
 
     | t_sub : forall {G e T U e' c},
         G |-d e : T ~> e' ->
@@ -1282,15 +1281,12 @@ Module D.
         apply hasType_closed in eTe'. constructor. apply CC.closed_close.
         intuition.
       - apply hasType_closed in eTe'1. apply hasType_closed in eTe'2.
-        apply wfTy_closed in H. split. constructor; intuition.
-        intuition. constructor; intuition.
+        intuition; constructor; assumption.
       - apply hasType_closed in eTe'1. apply hasType_closed in eTe'2.
         split. constructor; intuition. intuition.
         inversion H3. subst. apply closed_open. assumption. inversion H1.
         subst. lia. constructor; intuition.
       - apply wfTy_closed in H. repeat constructor; intuition.
-        eapply CC.closed_monotonic. eassumption. lia. lia. 
-        eapply CC.closed_monotonic. eassumption. lia. lia.
       - apply hasType_closed in eTe'. apply subtype_closed in H.
         intuition. constructor; intuition.
 
@@ -1353,6 +1349,76 @@ Module D.
          | eapply hasType_wfCx; eassumption].
   Qed.
 
-  
+  Notation "'Cx'" := (fun (G : cx) G' => (CC.wfCx G' /\ length G = length G')).
+
+  Notation "'Ty'" := (fun G (_ : expr) T' =>
+    forall {G'}, G |-d ~> G' -> CC.hasType G' T' CC.prop).
+
+  Notation "'Tm'" := (fun G (_ : expr) T e' => 
+    forall {G'}, G |-d ~> G' -> 
+    forall {T'}, G |-d T ~> T' -> 
+    CC.hasType G' e' T').
+
+  Notation "'Sub'" := (fun G T U c =>
+    forall {G'}, G |-d ~> G' ->
+    forall {T'}, G |-d T ~> T' -> 
+    forall {U'}, G |-d U ~> U' ->
+    CC.hasType G' c (CC.TAll T' U')).
+
+  (* Preservation *)
+  Fixpoint t_Cx {G G'} (wfGG' : G |-d ~> G') : Cx G G'
+    with t_Ty {G T T'} (wfTT' : G |-d T ~> T') : Ty G T T'
+    with t_Tm {G e T e'} (eTe' : G |-d e : T ~> e') : Tm G e T e'
+    with t_Sub {G T U c} (sTU : G |-d T <: U ~> c) : Sub G T U c
+
+    with t_lookup 
+      {G x T} (lxT : lookup G x T) 
+      {G'} (wfGG' : G |-d ~> G')
+      {T'} (wfTT' : G |-d T ~> T')
+      : lookup G' x T'.
+  Proof.
+    * destruct wfGG'. 
+      - split; constructor.
+      - apply t_Cx in wfGG' as H1. intuition.
+        + econstructor. assumption. eapply t_Ty; eassumption. 
+        + simpl. lia.
+
+    * destruct wfTT'; intros.
+      - apply CC.wf_bot. eapply t_Cx. eassumption.
+      - apply CC.wf_top. eapply t_Cx. eassumption.
+      - eapply CC.wf_all. apply wfTy_closed in wfTT'2. apply t_Cx in H0.
+        intuition. rewrite H4. apply CC.closed_close. rewrite <- H4. 
+        assumption.
+        assert (V : CC.hasType G' T' CC.prop). eapply t_Ty; eassumption.
+        assumption. apply t_Cx in H0 as H1. intuition. rewrite H3.
+        rewrite CC.open_close. eapply t_Ty. eassumption. 
+        econstructor; eassumption. apply wfTy_closed in wfTT'2.
+        rewrite <- H3. intuition.
+      - eapply CC.wf_typ; eapply t_Ty; eassumption.
+      - assert (exists TU', G |-d TTyp T U ~> TU'). admit.
+        destruct H1. inversion H1. subst. 
+        eapply CC.wf_sel. eapply t_Tm; eassumption.
+
+    * destruct eTe'; intros. 
+      - econstructor. eapply t_Cx. eassumption. eapply t_lookup; eassumption.
+      - inversion H3. subst. apply t_Cx in H2 as E. destruct E.
+        assert (CC.hasType G' T'1 CC.prop).
+        eapply t_Ty; eassumption.
+        econstructor. apply wfTy_closed in H3. rewrite <- H5. intuition.
+        apply hasType_closed in eTe'. rewrite H5. apply CC.closed_close.
+        rewrite <- H5. intuition. eassumption. rewrite H5. 
+        repeat rewrite CC.open_close. eapply t_Tm. eassumption.
+        constructor; assumption. assumption. apply wfTy_closed in H10.
+        rewrite <- H5. intuition. apply hasType_closed in eTe'. 
+        rewrite <- H5. intuition.
+      - admit.
+      - admit.
+      - admit.
+      - admit.
+
+    * admit.
+
+    * admit.
+  Admitted.
 
 End D.
