@@ -1064,7 +1064,7 @@ Module D.
     | cl_selB : forall i, i < b -> closed b f (TSel #i)
     | cl_selF : forall x, x < f -> closed b f (TSel `x).
 
-  Reserved Notation "G |-d" (at level 90, no associativity).
+  Reserved Notation "G |-d ~> G'" (at level 90, no associativity).
   Reserved Notation "G |-d T ~> T'" 
       (at level 90, T at next level, no associativity).
   Reserved Notation "G |-d e : T ~> e'" 
@@ -1072,23 +1072,23 @@ Module D.
   Reserved Notation "G |-d T <: U ~> c" 
       (at level 90, T at next level, no associativity).
 
-  Inductive wfCx : cx -> Prop :=
-    | wf_nil : nil |-d
+  Inductive wfCx : cx -> CC.cx -> Prop :=
+    | wf_nil : nil |-d ~> nil
 
-    | wf_snoc : forall {G T T'}, 
-        G |-d -> 
+    | wf_snoc : forall {G T G' T'}, 
+        G |-d ~> G' -> 
         G |-d T ~> T' -> 
-        G ~ T |-d
+        G ~ T |-d ~> G' ~ T'
 
-    where "G |-d" := (wfCx G) : d_scope
+    where "G |-d ~> G'" := (wfCx G G') : d_scope
 
     with wfTy : cx -> expr -> CC.expr -> Prop :=
-    | wf_bot : forall {G}, 
-        G |-d -> 
+    | wf_bot : forall {G G'}, 
+        G |-d ~> G' -> 
         G |-d TBot ~> CC.TBot
 
-    | wf_top : forall {G},
-        G |-d ->
+    | wf_top : forall {G G'},
+        G |-d ~> G' ->
         G |-d TTop ~> CC.TTop
 
     | wf_all : forall {G T U T' U'},
@@ -1102,41 +1102,41 @@ Module D.
         G |-d U ~> U' ->
         G |-d TTyp T U ~> CC.TTyp T' U'
 
-    | wf_sel : forall G x T U e',
+    | wf_sel : forall {G x T U e'},
         G |-d `x : TTyp T U ~> e' ->
         G |-d TSel `x ~> CC.TSel e'
 
     where "G |-d T ~> T'" := (wfTy G T T') : d_scope
 
     with hasType : cx -> expr -> expr -> CC.expr -> Prop :=
-    | t_var : forall G x T,
-        G |-d ->
+    | t_var : forall {G G' x T},
+        G |-d ~> G' ->
         lookup G x T ->
         G |-d `x : T ~> `x
 
-    | t_lam : forall G T e U T' e',
+    | t_lam : forall {G T e U T' e'},
         closed 1 (length G) e ->
         closed 0 (length G) (TAll T U) ->
         G |-d T ~> T' ->
         G ~ T |-d e ^^ (length G) : U ^^ (length G) ~> e' ->
         G |-d tLam e : TAll T U ~> CC.tLam (CC.close (length G) 0 e')
 
-    | t_app : forall G t u T U t' u' U',
+    | t_app : forall {G t u T U t' u' U'},
         G |-d t : TAll T U ~> t' ->
         G |-d u : T ~> u' ->
         G |-d U ~> U' ->
         G |-d t $ u : U ~> CC.tApp t' u'
 
-    | t_dapp : forall G t x T U t' e',
+    | t_dapp : forall {G t x T U t' e'},
         G |-d t : TAll T U ~> t' -> 
         G |-d `x : T ~> e' ->
         G |-d t $ `x : U ^^ x ~> CC.tApp t' e'
 
-    | t_typ : forall G T T',
+    | t_typ : forall {G T T'},
         G |-d T ~> T' ->
         G |-d tTyp T : TTyp T T ~> CC.TTyp T' T'
 
-    | t_sub : forall G e T U e' c,
+    | t_sub : forall {G e T U e' c},
         G |-d e : T ~> e' ->
         G |-d T <: U ~> c ->
         G |-d e : U ~> CC.tApp c e'
@@ -1144,15 +1144,15 @@ Module D.
     where "G |-d e : T ~> T'" := (hasType G e T T') : d_scope
 
     with subtype : cx -> expr -> expr -> CC.expr -> Prop :=
-    | s_bot : forall G T T', 
+    | s_bot : forall {G T T'}, 
         G |-d T ~> T' ->
         G |-d TBot <: T ~> CC.SBot T'
 
-    | s_top : forall G T T',
+    | s_top : forall {G T T'},
         G |-d T ~> T' ->
         G |-d T <: TTop ~> CC.STop T'
 
-    | s_all : forall G T1 U1 T2 U2 U1' cT cU,
+    | s_all : forall {G T1 U1 T2 U2 U1' cT cU},
         closed 1 (length G) U1 ->
         closed 1 (length G) U2 ->
         G |-d T2 <: T1 ~> cT ->
@@ -1160,22 +1160,22 @@ Module D.
         G ~ T2 |-d U1 ^^ (length G) <: U2 ^^ (length G) ~> cU ->
         G |-d TAll T1 U1 <: TAll T2 U2 ~> CC.SAll cT (CC.close (length G) 0 cU)
           
-    | s_typ : forall G T1 U1 T2 U2 cT cU,
+    | s_typ : forall {G T1 U1 T2 U2 cT cU},
         G |-d T2 <: T1 ~> cT ->
         G |-d U1 <: U2 ~> cU ->
         G |-d TTyp T1 U1 <: TTyp T2 U2 ~> CC.STyp cT cU
 
-    | s_sel1 : forall G x T U e',
+    | s_sel1 : forall {G x T U e'},
         G |-d `x : TTyp T U ~> e' ->
         G |-d T <: TSel `x ~> CC.SSel1 e'
 
-    | s_sel2 : forall G x T U e',
+    | s_sel2 : forall {G x T U e'},
         G |-d `x : TTyp T U ~> e' ->
         G |-d TSel `x <: U ~> CC.SSel2 e'
 
-    | s_refl : forall G T T', G |-d T ~> T' -> G |-d T <: T ~> CC.tId
+    | s_refl : forall {G T T'}, G |-d T ~> T' -> G |-d T <: T ~> CC.tId
 
-    | s_trans : forall G T U V T2U U2V,
+    | s_trans : forall {G T U V T2U U2V},
         G |-d T <: U ~> T2U ->
         G |-d U <: V ~> U2V ->
         G |-d T <: V ~> CC.tLam (CC.tApp U2V (CC.tApp T2U #0))
@@ -1255,7 +1255,7 @@ Module D.
       : closed 0 (length G) e /\ closed 0 (length G) T /\
         CC.closed 0 (length G) e'
 
-    with wfCx_closed {G} (wfG : G |-d) 
+    with wfCx_closed {G G'} (wfG : G |-d ~> G') 
       : forall T, In T G -> closed 0 (length G) T
 
     with subtype_closed {G T U c} (stTUc : G |-d T <: U ~> c)
@@ -1276,7 +1276,7 @@ Module D.
 
     * destruct eTe'.
       - split. constructor. eapply lookup_lt. eassumption. split.
-        apply wfCx_closed. assumption. eapply lookup_in. eassumption.
+        eapply wfCx_closed. eassumption. eapply lookup_in. eassumption.
         constructor. eapply lookup_lt. eassumption.
       - split. constructor. assumption. split. assumption.
         apply hasType_closed in eTe'. constructor. apply CC.closed_close.
@@ -1298,7 +1298,7 @@ Module D.
       - destruct 1.
       - intros. apply closed_monotonic with (b := 0) (f := length G).
         destruct H0. subst. apply wfTy_closed in H. intuition.
-        apply wfCx_closed; assumption. lia. simpl. lia.
+        eapply wfCx_closed; eassumption. lia. simpl. lia.
 
     * destruct stTUc.
       - apply wfTy_closed in H. intuition. constructor. constructor.
@@ -1339,108 +1339,20 @@ Module D.
 
   (* If a preterm (resp. pretype) is a term (resp. type) under precontext G, 
      then G is a context. *)
-  Fixpoint wfTy_wfCx {G T T'} (wfTT' : G |-d T ~> T') : G |-d
-    with hasType_wfCx {G e T e'} (eTe' : G |-d e : T ~> e') : G |-d.
+  Fixpoint wfTy_wfCx {G T T'} (wfTT' : G |-d T ~> T') 
+      : exists G', G |-d ~> G'
+
+    with hasType_wfCx {G e T e'} (eTe' : G |-d e : T ~> e') 
+      : exists G', G |-d ~> G'.
   Proof.
-    * destruct wfTT'; try solve [ assumption 
-                                | eapply wfTy_wfCx; eassumption
-                                | eapply hasType_wfCx; eassumption ].
-    * destruct eTe'; try solve [ assumption 
-                               | eapply wfTy_wfCx; eassumption
-                               | eapply hasType_wfCx; eassumption ].
+    2: destruct eTe'.
+    1: destruct wfTT'.
+    all: try solve 
+         [ econstructor; eassumption 
+         | eapply wfTy_wfCx; eassumption 
+         | eapply hasType_wfCx; eassumption].
   Qed.
 
-  Lemma lookup_wfCx_splice : forall G' G x T,
-    lookup (G +~ G') x T ->
-    forall U, G ~ U +~ map (length G +>) G' |-d ->
-    lookup (G ~ U +~ map (length G +>) G')
-        (if length G <=? x then S x else x) (length G +> T).
-  Proof.
-    induction G'; simpl; intros.
-    - replace (length G <=? x) with false.
-      assert (length G +> T = T). eapply splice_closed.
-  Admitted.
-
-  Fixpoint wf_thin
-    {G G' T T'} (wfTT' : G +~ G' |-d T ~> T')
-    {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-d)
-    : G ~ U +~ map (length G +>) G' |-d length G +> T ~> 
-        CC.splice (length G) T'
-
-    with t_thin 
-    {G G' e T e'} (eTe' : G +~ G' |-d e : T ~> e')
-    {U} (wfGUG' : G ~ U +~ map (length G +>) G' |-d) 
-    : G ~ U +~ map (length G +>) G' |-d length G +> e : length G +> T ~>
-        CC.splice (length G) e'.
-  Proof.
-    all: remember (G +~ G') as GG'.
-
-    * destruct wfTT'; subst; simpl.
-      - constructor. assumption.
-      - constructor. assumption.
-      - rewrite CC.splice_close. 
-        replace (length G <=? length (G +~ G')) with true.
-        replace (S (length (G +~ G'))) 
-          with (length (G ~ U +~ map (length G +>) G')).
-        constructor. rewrite length_elim_middle. apply closed_splice.
-        rewrite app_length in *. rewrite map_length. assumption.
-        apply wf_thin; assumption.
-        replace ((G ~ U +~ map (length G +>) G') ~ length G +> T)
-          with (G ~ U +~ map (length G +>) (G' ~ T)).
-        replace (length (G ~ U +~ map (length G +>) G'))
-          with (if length G <=? length (G +~ G') 
-                then (S (length (G +~ G')))
-                else length (G +~ G')).
-        rewrite <- splice_open.
-        apply wf_thin. assumption. simpl. econstructor.
-        assumption. apply wf_thin; eassumption.
-        replace (length G <=? length (G +~ G')) with true.
-        symmetry. rewrite length_elim_middle. repeat rewrite app_length.
-        rewrite map_length. reflexivity. symmetry. apply Nat.leb_le.
-        rewrite app_length. lia. reflexivity. rewrite length_elim_middle.
-        repeat rewrite app_length. rewrite map_length. reflexivity.
-        symmetry. rewrite app_length. apply Nat.leb_le. lia.
-      - constructor; apply wf_thin; assumption.
-      - apply wf_sel with (T := length G +> T) (U := length G +> U0).
-        rewrite splice_typ. rewrite splice_fVar. apply t_thin; assumption.
-
-    * destruct eTe'; subst.
-      - constructor. assumption. apply lookup_wfCx_splice; assumption.
-      - admit.
-      - admit.
-      - admit.
-      - admit.
-      - admit.
-  Admitted.
-
-  Definition t_weak 
-    {G e T e'} (eTe' : G |-d e : T ~> e') 
-    {U} (wfGU : G ~ U |-d)
-    : G ~ U |-d e : T ~> e'.
-  Proof.
-    assert ((length G +> e = e) * (length G +> T = T) * 
-            (CC.splice (length G) e' = e')).
-    apply hasType_closed in eTe'. split. 
-    split; apply splice_closed with (b := 0); intuition.
-    apply CC.splice_closed with (b := 0). intuition.
-    assert (G ~ U = G ~ U +~ (map (length G +>) nil)) by reflexivity.
-    intuition. rewrite <- a0. rewrite <- b0. rewrite <- b. rewrite H0.
-    apply t_thin; eassumption.
-  Qed.
-
-  Definition wf_weak
-    {G T T'} (wfTT' : G |-d T ~> T')
-    {U} (wfGU : G ~ U |-d)
-    : G ~ U |-d T ~> T'.
-  Proof.
-    apply wfTy_closed in wfTT' as H.
-    assert (length G +> T = T). apply splice_closed with (b := 0). intuition.
-    assert (CC.splice (length G) T' = T').
-    apply CC.splice_closed with (b := 0). intuition.
-    assert (G ~ U = G ~ U +~ map (length G +>) nil) by reflexivity.
-    rewrite <- H0. rewrite <- H1. rewrite H2.
-    apply wf_thin; eassumption.
-  Qed.
-
+  
 
 End D.
