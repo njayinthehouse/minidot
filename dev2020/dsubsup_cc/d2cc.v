@@ -1442,55 +1442,5 @@ Module D.
     apply wf_thin; eassumption.
   Qed.
 
-  Search "exists_".
-
-  Fail Fixpoint d2ccCx {G} (wfG : G |-d) : CC.cx :=
-    match wfG in G |-d with
-    | wf_nil => nil
-    | @wf_snoc _ _ T' wfG0 _ => d2ccCx wfG0 ~ T'
-    end.
-
-  (* We need the above to specify the type signature of the wfCx translation*)
-
-  Fixpoint d2cc_wfCx 
-    {G} (wfG : G |-d) 
-    : exists G', CC.wfCx G' /\ length G = length G'
-
-    with d2cc_wfTy
-    {G T T'} (wfTT' : G |-d T ~> T')
-    : exists G', CC.hasType G' T' CC.prop /\ length G = length G'
-
-    with d2cc_hasType
-    {G e T e'} (eTe' : G |-d e : T ~> e')
-    : exists T', (G |-d T ~> T') /\
-      (exists G', CC.hasType G' e' T' /\ length G = length G').
-  Proof.
-    * destruct wfG.
-      - exists nil. split; constructor.
-      - apply d2cc_wfCx in wfG. apply d2cc_wfTy in H. destruct H. 
-        exists (x ~ T'). split. econstructor. intuition.
-        eapply CC.hasType_wfCx. eassumption. intuition. eassumption.
-        intuition. simpl. lia.
-
-    * destruct wfTT'.
-      - apply d2cc_wfCx in H. destruct H. exists x. intuition.
-        apply CC.wf_bot. eassumption.
-      - apply d2cc_wfCx in H. destruct H. exists x. intuition. 
-        apply CC.wf_top. eassumption.
-      - (* Problematic *) apply wfTy_wfCx in wfTT'1 as H1. 
-        apply d2cc_wfCx in H1. destruct H1. exists x. econstructor.
-        intuition. rewrite H2. econstructor. apply CC.closed_close.
-        apply wfTy_closed in wfTT'2. simpl in wfTT'2. rewrite H2 in wfTT'2.
-        intuition. apply d2cc_wfTy in wfTT'1. destruct wfTT'1.
-        destruct H0. Abort (* x = x0 *).
 
 End D.
-
-(* 
-  TODO: 
-   1. I seem to need some sort of proof degeneracy theorem. It's not
-      proof irrelevance, because it depends on the shape of the proof. 
-      For contexts, it might just be that all proofs of G |-d are equal.
-   2. Finish thinning, *_wfTy lemmas. The latter might help you in admitA.
-   3. 
- *)
