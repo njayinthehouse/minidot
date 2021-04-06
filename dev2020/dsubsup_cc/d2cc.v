@@ -647,6 +647,41 @@ Module CC.
   (**************************************************************************
    * Properties of full beta-pi reduction and equality *)
 
+  Corollary e_all1 : 
+    forall T T', T == T' ->
+    forall U, TAll T U == TAll T' U.
+  Proof.
+    induction 1.
+    - constructor. apply r_all1. assumption.
+    - intros. apply e_refl.
+    - intros. apply e_sym. auto.
+    - intros. eapply e_trans; eauto.
+  Qed.
+
+  Corollary e_all2 :
+    forall U U', U == U' ->
+    forall T, TAll T U == TAll T U'.
+  Proof.
+    induction 1.
+    - constructor. apply r_all2. assumption.
+    - intros. apply e_refl.
+    - intros. apply e_sym. auto.
+    - intros. eapply e_trans; eauto.
+  Qed.
+
+  Lemma e_all : 
+    forall T T', T == T' ->
+    forall U U', U == U' ->
+    TAll T U == TAll T' U'.
+  Proof.
+    intros. eapply e_trans. apply e_all1. eassumption. apply e_all2. auto.
+  Qed.
+
+  Lemma e_close : 
+    forall T T', T == T' -> forall x b, close x b T == close x b T'.
+  Proof.
+  Admitted.
+
   Lemma e_sig1 : forall T1 T2, 
     T1 == T2 ->
     forall U, TSig T1 U == TSig T2 U.
@@ -1348,6 +1383,28 @@ Module D.
          | eapply wfTy_wfCx; eassumption 
          | eapply hasType_wfCx; eassumption].
   Qed.
+
+  (* Expressions in System D<:> are related to a class of beta-equivalent
+     expressions in CoC. *)
+  Fixpoint wfTy_eq 
+    {G T T1'} (wfTT1' : G |-d T ~> T1') 
+        {T2'} (wfTT2' : G |-d T ~> T2')
+    : CC.equals T1' T2'
+
+    with hasType_eq
+    {G e T t} (eTt : G |-d e : T ~> t)
+          {u} (eTu : G |-d e : T ~> u)
+    : CC.equals t u.
+  Proof.
+    * destruct wfTT1'; inversion wfTT2'; subst.
+      1,2: eapply CC.e_refl.
+      apply CC.e_all. eapply wfTy_eq; eassumption. apply CC.e_close.
+      eapply wfTy_eq; eassumption.
+      admit.
+      admit.
+
+    * destruct eTt; inversion eTu; subst.
+  Admitted.
 
   Notation "'Cx'" := (fun (G : cx) G' => (CC.wfCx G' /\ length G = length G')).
 
