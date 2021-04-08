@@ -251,6 +251,7 @@ Module CC.
   (* Do we need eta equality? *)
   Inductive reduce : expr -> expr -> Prop :=
     | r_beta : forall e u, (tLam e) $ u ~~> e ^$ u
+    | r_eta : forall e, (tLam (e $ #0)) ~~> e
     | r_pi1 : forall e u, tFst (e & u) ~~> e
     | r_pi2 : forall e u, tSnd (e & u) ~~> u
     | r_all1 : forall T U T', T ~~> T' -> TAll T U ~~> TAll T' U
@@ -677,6 +678,47 @@ Module CC.
     intros. eapply e_trans. apply e_all1. eassumption. apply e_all2. auto.
   Qed.
 
+  Lemma e_lam :
+    forall t t', t == t' ->
+    tLam t == tLam t'.
+  Proof.
+    induction 1.
+    - constructor. constructor. assumption.
+    - apply e_refl.
+    - apply e_sym. assumption.
+    - eapply e_trans; eassumption.
+  Qed.
+
+  Corollary e_app1 :
+    forall t t', t == t' ->
+    forall u, t $ u == t' $ u.
+  Proof.
+    induction 1; intros.
+    - constructor. apply r_app1. assumption.
+    - apply e_refl.
+    - apply e_sym. auto.
+    - eapply e_trans; eauto.
+  Qed.
+
+  Corollary e_app2 :
+    forall u u', u == u' ->
+    forall t, t $ u == t $ u'.
+  Proof.
+    induction 1; intros.
+    - constructor. apply r_app2. auto.
+    - apply e_refl.
+    - auto.
+    - eapply e_trans; eauto.
+  Qed.
+
+  Lemma e_app :
+    forall t t', t == t' ->
+    forall u u', u == u' ->
+    t $ u == t' $ u'.
+  Proof.
+    intros. eapply e_trans. apply e_app1. eauto. apply e_app2. auto.
+  Qed.
+
   Lemma e_close : 
     forall T T', T == T' -> forall x b, close x b T == close x b T'.
   Proof.
@@ -887,7 +929,8 @@ Module CC.
   Qed.
 
   Hint Resolve t_weak wfCx_wfTy : core.
-          
+
+
   (*************************************************************************
    * Embedding of System D<:> 
    * --------------------------------*)
@@ -1384,6 +1427,46 @@ Module D.
          | eapply hasType_wfCx; eassumption].
   Qed.
 
+  (* Thinning *)
+  Fixpoint wf_thin 
+    {G1 G2 T T'} (wfTT' : G1 +~ G2 |-d T ~> T')
+          {G' U} (wfG : G1 ~ U +~ map (length G1 +>) G2 |-d ~> G')
+    : G1 ~ U +~ map (length G1 +>) G2 |-d length G1 +> T ~> 
+        CC.splice (length G1) T'
+
+    with t_thin
+    {G1 G2 e T e'} (eTe' : G1 +~ G2 |-d e : T ~> e')
+            {G' U} (wfG : G1 ~ U +~ G2 |-d ~> G')
+    : G1 ~ U +~ map (length G1 +>) G2 |-d length G1 +> e : length G1 +> T ~>
+        CC.splice (length G1) e'.
+  Proof.
+    * destruct wfTT'; simpl.
+      1,2: econstructor; eassumption.
+  Admitted.
+      
+
+  Lemma inversion_varF : 
+    forall x G T e, G |-d `x : T ~> e ->
+    (exists U, lookup G x U /\ 
+     (exists c, (G |-d U <: T ~> c) /\ CC.equals e (CC.tApp c `x))).
+  Proof.
+    intro. remember (tVar `x) as e. induction 1; subst; try discriminate.
+    - inversion Heqe. subst. exists T. intuition. exists CC.tId. split.
+      eapply s_refl.
+
+  Lemma inversion_lam :
+    forall t G W u, G |-d tLam t : W ~> u ->
+    closed 1 (length G) t /\
+    exists T U, closed 0 (length G) (TAll T U) /\
+    exists T', (G |-d T ~> T') /\
+    exists U', (G ~ T |-d U ^^ (length G) ~> U').
+  Proof.
+    intro. remember (tLam t) as e. induction 1; subst; try discriminate.
+    - inversion Heqe; subst. intuition. exists T. exists U. intuition.
+      exists T'. intuition. admit (* hasType_wfTy *).
+    - intuition.
+  Admitted.
+
   (* Expressions in System D<:> are related to a class of beta-equivalent
      expressions in CoC. *)
   Fixpoint wfTy_eq 
@@ -1403,7 +1486,9 @@ Module D.
       admit.
       admit.
 
-    * destruct eTt; inversion eTu; subst.
+    * destruct eTt.
+      - apply inversion_varF in eTu. intuition. subst. apply CC.e_refl.
+        
   Admitted.
 
   Notation "'Cx'" := (fun (G : cx) G' => (CC.wfCx G' /\ length G = length G')).
@@ -1479,3 +1564,11 @@ Module D.
   Admitted.
 
 End D.
+
+(* TODO: 
+   1. Prove thinning
+   2. Prove weakening
+   3. Prove inversion lemmas
+   4. Prove that expressions in System D<:> map to beta-equivalent expressions
+      in CoC.
+ *)
