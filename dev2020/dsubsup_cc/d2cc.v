@@ -532,6 +532,15 @@ Module CC.
     apply beq_nat_false in E. lia.
   Qed.
 
+  Lemma close_closed : forall e b f,
+    closed b f e -> forall i, close f i e = e.
+  Proof.
+    induction 1; auto; simpl.
+    destruct (f =? x) eqn:E. apply beq_nat_true in E. lia. auto. 
+    1,3-5: intros; rewrite IHclosed1; rewrite IHclosed2; auto.
+    all: intros; rewrite IHclosed; auto.
+  Qed.
+
   (* Opening the bth bound variable of a preterm that is closed under b 
      bound variables does not change the preterm. *)
   Lemma open_closed : forall e b f, 
@@ -1287,14 +1296,30 @@ Module D.
     TTyp (k +> T) (k +> U) = k +> (TTyp T U).
   Proof. reflexivity. Qed.
 
-  Corollary splice_fVar : forall x k, 
+  Corollary splice_varF : forall x k, 
     tVar (varF (if k <=? x then S x else x)) = k +> `x.
+  Proof. reflexivity. Qed.
+
+  Corollary splice_all : forall T U k,
+    TAll (k +> T) (k +> U) = k +> (TAll T U).
+  Proof. reflexivity. Qed.
+
+  Corollary splice_lam : forall t k, tLam (k +> t) = k +> (tLam t).
   Proof. reflexivity. Qed.
 
   Lemma closed_splice : forall e b f,
     closed b f e -> forall k, closed b (S f) (k +> e).
   Proof.
     induction 1; simpl; constructor; auto; destruct (k <=? x); lia.
+  Qed.
+
+  Lemma open_closed : forall e b f,
+    closed b f e -> forall x, {b :-> x} e = e.
+  Proof.
+    induction 1; eauto; simpl.
+    1,7: destruct (b =? i) eqn:E; auto. 1,2: apply beq_nat_true in E; lia. 
+    1,3,4: intros; rewrite IHclosed1; rewrite IHclosed2; auto.
+    all: intros; rewrite IHclosed; auto.
   Qed.
 
   Lemma splice_closed : forall f e b, closed b f e -> f +> e = e.
@@ -1436,14 +1461,165 @@ Module D.
 
     with t_thin
     {G1 G2 e T e'} (eTe' : G1 +~ G2 |-d e : T ~> e')
-            {G' U} (wfG : G1 ~ U +~ G2 |-d ~> G')
+            {G' U} (wfG : G1 ~ U +~ map (length G1 +>) G2 |-d ~> G')
     : G1 ~ U +~ map (length G1 +>) G2 |-d length G1 +> e : length G1 +> T ~>
-        CC.splice (length G1) e'.
+        CC.splice (length G1) e'
+
+    with s_thin
+    {G1 G2 T1 T2 c} (st : G1 +~ G2 |-d T1 <: T2 ~> c)
+             {G' W} (wfG : G1 ~ W +~ map (length G1 +>) G2 |-d ~> G')
+    : G1 ~ W +~ map (length G1 +>) G2 |-d 
+        length G1 +> T1 <: length G1 +> T2 ~> CC.splice (length G1) c.
   Proof.
-    * destruct wfTT'; simpl.
-      1,2: econstructor; eassumption.
+    * remember (G1 +~ G2) as G. destruct wfTT'; subst; simpl.
+      - econstructor; eassumption.
+      - econstructor; eassumption.
+      - rewrite CC.splice_close. 
+        assert (length G1 <=? length (G1 +~ G2) = true).
+        { rewrite app_length. apply Nat.leb_le. lia. }
+        assert (S (length (G1 +~ G2)) = 
+                length (G1 ~ U +~ map (length G1 +>) G2)).
+        { repeat rewrite app_length. rewrite map_length. simpl. lia. }
+        assert (G1 ~ U +~ map (length G1 +>) G2 |-d length G1 +> T ~>
+                  CC.splice (length G1) T').
+        { eapply wf_thin; eassumption. }
+        rewrite H0. rewrite H1. constructor; try assumption.
+        rewrite <- H1. apply closed_splice. assumption.
+        replace ((G1 ~ U +~ map (length G1 +>) G2) ~ length G1 +> T)
+        with (G1 ~ U +~ map (length G1 +>) (G2 ~ T)) by reflexivity.
+        simpl. replace (length (G1 ~ U +~ map (length G1 +>) G2))
+        with (if length G1 <=? length (G1 +~ G2) then S (length (G1 +~ G2))
+        else length (G1 +~ G2)). rewrite <- splice_open. 
+        replace ((G1 ~ U +~ map (length G1 +>) G2) ~ length G1 +> T)
+        with (G1 ~ U +~ map (length G1 +>) (G2 ~ T)). eapply wf_thin.
+        eassumption. simpl. econstructor. eassumption. eapply wf_thin;
+        eassumption. reflexivity. replace (length G1 <=? length (G1 +~ G2))
+        with true. repeat rewrite app_length. rewrite map_length. simpl. lia.
+      - econstructor; eapply wf_thin; eassumption.
+      - apply @wf_sel with (T := length G1 +> T) (U := length G1 +> U0).
+        rewrite splice_typ. rewrite splice_varF. eapply t_thin; eassumption.
+
+    * remember (G1 +~ G2) as G. destruct eTe'; subst; simpl.
+      - econstructor. eassumption. admit (* lookup_wfCx_splice *).
+      - rewrite CC.splice_close. 
+        assert (length G1 <=? length (G1 +~ G2) = true).
+        { rewrite app_length. apply Nat.leb_le. lia. }
+        assert (S (length (G1 +~ G2)) = 
+                length (G1 ~ U +~ map (length G1 +>) G2)).
+        { repeat rewrite app_length. rewrite map_length. simpl. lia. }
+        assert (G1 ~ U +~ map (length G1 +>) G2 |-d length G1 +> T ~>
+                  CC.splice (length G1) T').
+        { eapply wf_thin; eassumption. }
+        rewrite H2. rewrite H3. econstructor. rewrite <- H3.
+        apply closed_splice. assumption. rewrite splice_all. rewrite <- H3.
+        apply closed_splice. assumption. eassumption.
+        replace ((G1 ~ U +~ map (length G1 +>) G2) ~ length G1 +> T)
+          with (G1 ~ U +~ map (length G1 +>) (G2 ~ T)) by reflexivity.
+        assert (forall e, 
+        (length G1 +> e) ^^(length (G1 ~ U +~ map (length G1 +>) G2))                 = length G1 +> (e ^^ (length (G1 +~ G2)))).
+        rewrite <- H3. replace (S (length (G1 +~ G2))) with
+        (if length G1 <=? length (G1 +~ G2) then S (length (G1 +~ G2))
+        else length (G1 +~ G2)). intros. rewrite <- splice_open.
+        reflexivity. replace (length G1 <=? length (G1 +~ G2)) with true.
+        reflexivity. repeat rewrite H5. eapply t_thin. eassumption.
+        simpl. econstructor. eassumption. eapply wf_thin; eassumption.
+      - apply @t_app with (T := length G1 +> T).
+        replace (length (G1 ~ U +~ map (length G1 +>) G2))
+        with (S (length (G1 +~ G2))). apply closed_splice. assumption.
+        repeat rewrite app_length. rewrite map_length. simpl. lia.
+        rewrite splice_all. eapply t_thin; eassumption.
+        eapply t_thin; eassumption.
+      - rewrite splice_open. eapply t_dapp. rewrite splice_all.
+        eapply t_thin; eassumption. rewrite splice_varF. 
+        eapply t_thin; eassumption.
+      - econstructor. eapply wf_thin; eassumption.
+      - econstructor. eapply t_thin; eassumption. eapply s_thin; eassumption.
+
+    * remember (G1 +~ G2) as G. destruct st; subst; simpl.
+      - constructor. eapply wf_thin; eassumption.
+      - constructor. eapply wf_thin; eassumption.
+      - rewrite CC.splice_close. replace (length G1 <=? length (G1 +~ G2))
+        with true. 
+        assert (S (length (G1 +~ G2)) = 
+                length (G1 ~ W +~ map (length G1 +>) G2)).
+        repeat rewrite app_length. rewrite map_length. simpl. lia.
+        rewrite H2. econstructor. rewrite <- H2. apply closed_splice.
+        assumption. rewrite <- H2. apply closed_splice. assumption.
+        eapply s_thin; eassumption. admit. admit. symmetry. apply Nat.leb_le.
+        rewrite app_length. lia.
+      - econstructor; eapply s_thin; eassumption.
+      - econstructor. rewrite splice_varF. rewrite splice_typ. 
+        eapply t_thin; eassumption.
+      - econstructor. rewrite splice_varF. rewrite splice_typ.
+        eapply t_thin; eassumption.
+      - econstructor. eapply wf_thin; eassumption.
+      - econstructor; eapply s_thin; eassumption.
   Admitted.
-      
+
+  Theorem wf_weak : 
+    forall G T T', G |-d T ~> T' ->
+    forall U G', G ~ U |-d ~> G' ->
+    G ~ U |-d T ~> T'.
+  Proof.
+    intros. replace (G ~ U) with (G ~ U +~ map (length G +>) nil) 
+    by reflexivity.
+    replace T with (length G +> T). replace T' with (CC.splice (length G) T').
+    eapply wf_thin; eassumption.
+    1,2: apply wfTy_closed in H; intuition.
+    1: eapply CC.splice_closed. 2: eapply splice_closed.
+    all: eauto.
+  Qed.
+
+  Theorem t_weak :
+    forall G e T e', G |-d e : T ~> e' ->
+    forall U G', G ~ U |-d ~> G' ->
+    G ~ U |-d e : T ~> e'.
+  Proof.
+    intros. 
+    replace (G ~ U) with (G ~ U +~ map (length G +>) nil) by reflexivity.
+    replace e with (length G +> e). replace T with (length G +> T).
+    replace e' with (CC.splice (length G) e'). eapply t_thin; eauto.
+    1-3: apply hasType_closed in H; intuition.
+    eapply CC.splice_closed; eauto. all: eapply splice_closed; eauto.
+  Qed.
+
+  Theorem wf_strength : 
+    forall {G T}, closed 0 (length G) T ->
+    forall {U T'}, G ~ U |-d T ~> T' ->
+    G |-d T ~> T'.
+  Proof.
+    induction T; inversion 1; inversion 1; subst.
+    1,2: inversion H1; econstructor; eauto.
+    replace (CC.close (length (G ~ U0)) 0 U') with 
+    (CC.close (length G) 0 U'). econstructor; eauto.
+  Admitted.
+
+  Fixpoint wfCx_wfTy 
+    {G G'} (wfG : G |-d ~> G')
+    : forall {T}, In T G -> exists T', G |-d T ~> T'
+
+    with hasType_wfTy
+    {G e T e'} (eT : G |-d e : T ~> e')
+    : exists T', G |-d T ~> T'
+
+    with subtype_wfTy
+    {G T U c} (st : G |-d T <: U ~> c)
+    : (exists T', G |-d T ~> T') /\ (exists U', G |-d U ~> U').
+  Proof.
+    * destruct wfG; inversion 1; subst.
+      - exists T'. eapply wf_weak. assumption. econstructor; eassumption.
+      - pose (wfCx_wfTy _ _ wfG _ H1). destruct e. 
+        exists x. eapply wf_weak. assumption. econstructor; eassumption.
+
+    * destruct eT.
+      - eapply wfCx_wfTy. eassumption. eapply lookup_in. eassumption.
+      - apply hasType_wfTy in eT. destruct eT.
+        exists (CC.TAll T' (CC.close (length G) 0 x)). 
+        econstructor. inversion H0. subst. assumption. assumption.
+        assumption.
+      - apply hasType_wfTy in eT1. destruct eT1. inversion H0. subst.
+        erewrite open_closed in H7. 
+        
 
   Lemma inversion_varF : 
     forall x G T e, G |-d `x : T ~> e ->
