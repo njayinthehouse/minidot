@@ -1,6 +1,7 @@
 Require Import Compare_dec.
 Require Import EqNat.
 Require Import Equality.
+From Equations Require Import Equations.
 Require Import List.
 Require Import Lia.
 Require Import PeanoNat.
@@ -208,6 +209,8 @@ Module CC.
   Reserved Notation "G |-cc" (no associativity, at level 90).
   Reserved Notation "G |-cc e : T" (no associativity, at level 90,
                                    e at next level).
+
+  Compute (e{0 :-> tVar (varF 1)} (tLam (varB 2))).
 
   (* Closed expressions *)
   Inductive closed (b f : nat) : expr -> Prop :=
@@ -1029,9 +1032,8 @@ Module CC.
     G |-cc t $ u : U.
   Proof.
     intros. assert (U = U *^ u). symmetry. eapply open_closed. 
-    apply hasType_closed in H1. intuition. eauto. lia. rewrite H2.
-    econstructor; eauto.
-  Qed.
+    apply hasType_closed in H1. intuition. eauto. admit.
+  Admitted.
 
   Corollary d_dapp : forall G t x T U,
     G |-cc t : TAll T U ->
@@ -1618,7 +1620,8 @@ Module D.
         econstructor. inversion H0. subst. assumption. assumption.
         assumption.
       - apply hasType_wfTy in eT1. destruct eT1. inversion H0. subst.
-        erewrite open_closed in H7. 
+        erewrite open_closed in H7. admit.
+  Admitted.
         
 
   Lemma inversion_varF : 
@@ -1629,6 +1632,7 @@ Module D.
     intro. remember (tVar `x) as e. induction 1; subst; try discriminate.
     - inversion Heqe. subst. exists T. intuition. exists CC.tId. split.
       eapply s_refl.
+  Admitted.
 
   Lemma inversion_lam :
     forall t G W u, G |-d tLam t : W ~> u ->
@@ -1663,27 +1667,181 @@ Module D.
       admit.
 
     * destruct eTt.
-      - apply inversion_varF in eTu. intuition. subst. apply CC.e_refl.
+      - apply inversion_varF in eTu. intuition. subst.
         
   Admitted.
 
-  Notation "'Cx'" := (fun (G : cx) G' => (CC.wfCx G' /\ length G = length G')).
+  Inductive Nat: Prop :=
+    | Z : Nat
+    | Suc : Nat -> Nat.
 
-  Notation "'Ty'" := (fun G (_ : expr) T' =>
-    forall {G'}, G |-d ~> G' -> CC.hasType G' T' CC.prop).
+  Fixpoint plus (n m : Nat): Nat :=
+    match n with
+    | Z => m
+    | Suc k => Suc (plus k m)
+    end.
+  Notation "m + n" := (plus m n).
 
-  Notation "'Tm'" := (fun G (_ : expr) T e' => 
-    forall {G'}, G |-d ~> G' -> 
-    forall {T'}, G |-d T ~> T' -> 
-    CC.hasType G' e' T').
+  Inductive judgment: Type :=
+    | Cx : forall {G G'}, G |-d ~> G' -> judgment
+    | Ty : forall {G T T'}, G |-d T ~> T' -> judgment
+    | Tm : forall {G e T e'}, G |-d e : T ~> e' -> judgment
+    | Sub: forall {G T U c}, G |-d T <: U ~> c -> judgment.
 
-  Notation "'Sub'" := (fun G T U c =>
-    forall {G'}, G |-d ~> G' ->
-    forall {T'}, G |-d T ~> T' -> 
-    forall {U'}, G |-d U ~> U' ->
-    CC.hasType G' c (CC.TAll T' U')).
+  Fixpoint sizeCx {G G'} (wfG: G |-d ~> G'): Nat :=
+    match wfG in G |-d ~> G' with
+    | wf_nil => Z
+    | wf_snoc wfG0 wfT => Suc (sizeCx wfG0 + sizeTy wfT)
+    end
 
-  (* Preservation *)
+    with sizeTy {G T T'} (wfT: G |-d T ~> T'): Nat :=
+    match wfT in G |-d T ~> T' with
+    | wf_bot wfG | wf_top wfG => Suc (sizeCx wfG)
+    | wf_all _ wfT wfU | wf_typ wfT wfU => Suc (sizeTy wfT + sizeTy wfU)
+    | wf_sel xT => Suc (sizeTm xT)
+    end
+
+    with sizeTm {G e T e'} (eT: G |-d e : T ~> e'): Nat :=
+    match eT in G |-d e : T ~> e' with
+    | t_var wfG _ => Suc (sizeCx wfG)
+    | t_lam _ _ wfT tU => Suc (sizeTy wfT + sizeTm tU)
+    | t_app _ tTU uT | t_dapp tTU uT => Suc (sizeTm tTU + sizeTm uT)
+    | t_typ wfT => Suc (sizeTy wfT)
+    | t_sub eT s => Suc (sizeTm eT + sizeSub s)
+    end
+
+    with sizeSub {G T U c} (s: G |-d T <: U ~> c): Nat :=
+    match s in G |-d T <: U ~> c with
+    | s_bot wfT | s_top wfT => Suc (sizeTy wfT)
+    | s_all _ _ sT wfU sU => Suc (sizeSub sT + sizeTy wfU + sizeSub sU)
+    | s_typ sT sU => Suc (sizeSub sT + sizeSub sU)
+    | s_sel1 xT => Suc (sizeTm xT)
+    | s_sel2 xT => Suc (sizeTm xT)
+    | s_refl wfT => Suc (sizeTy wfT)
+    | s_trans s1 s2 => Suc (sizeSub s1 + sizeSub s2)
+    end.
+
+  Definition size (j: judgment): Nat :=
+    match j with
+    | Cx G => sizeCx G
+    | Ty T => sizeTy T
+    | Tm t => sizeTm t
+    | Sub s => sizeSub s
+    end.
+  (*
+  Inductive R : judgment -> judgment -> Prop :=
+    | lt_snoc1 : 
+        forall {G G'} (wfG: G |-d ~> G') {T T'} (wfT: G |-d T ~> T'),
+        R (Cx wfG) (Cx (wf_snoc wfG wfT))
+    | lt_snoc2 : 
+        forall {G G'} (wfG: G |-d ~> G') {T T'} (wfT: G |-d T ~> T'),
+        R (Ty wfT) (Cx (wf_snoc wfG wfT))
+    | lt_bot : 
+        forall {G G'} (wfG: G |-d ~> G'), R (Cx wfG) (Ty (wf_bot wfG))
+    | lt_top :
+        forall {G G'} (wfG: G |-d ~> G'), R (Cx wfG) (Ty (wf_top wfG))
+    | lt_all1 : 
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        forall {U} (cl: closed 1 (length G) U),
+        forall {U'} (wfU: G ~ T |-d U ^^ (length G) ~> U'),
+        R (Ty wfT) (Ty (wf_all cl wfT wfU))
+    | lt_all2 : 
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        forall {U} (cl: closed 1 (length G) U),
+        forall {U'} (wfU: G ~ T |-d U ^^ (length G) ~> U'),
+        R (Ty wfU) (Ty (wf_all cl wfT wfU))
+    | lt_typ1 :
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        forall {U U'} (wfU: G |-d U ~> U'),
+        R (Ty wfT) (Ty (wf_typ wfT wfU))
+    | lt_typ2 :
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        forall {U U'} (wfU: G |-d U ~> U'),
+        R (Ty wfU) (Ty (wf_typ wfT wfU))
+    | lt_sel :
+        forall {G x T U e'} (xT: G |-d `x : TTyp T U ~> e'),
+        R (Tm xT) (Ty (wf_sel xT))
+    | lt_var :
+        forall {G G'} (wfG: G |-d ~> G'),
+        forall {x T} (lx: lookup G x T),
+        R (Cx wfG) (Tm (t_var wfG lx))
+    | lt_lam1 :
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        forall {e} (cle: closed 1 (length G) e),
+        forall {U} (clTU: closed 0 (length G) (TAll T U)),
+        forall {e'} (eU: G ~ T |-d e^^ (length G) : U ^^ (length G) ~> e'),
+        R (Ty wfT) (Tm (t_lam cle clTU wfT eU))
+    | lt_lam2 :
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        forall {e} (cle: closed 1 (length G) e),
+        forall {U} (clTU: closed 0 (length G) (TAll T U)),
+        forall {e'} (eU: G ~ T |-d e^^ (length G) : U ^^ (length G) ~> e'),
+        R (Tm eU) (Tm (t_lam cle clTU wfT eU))
+    | lt_app1 :
+        forall {G U} (clU: closed 0 (length G) U),
+        forall {t T t'} (tTU: G |-d t : TAll T U ~> t'),
+        forall {u u'} (uT: G |-d u : T ~> u'),
+        R (Tm tTU) (Tm (t_app clU tTU uT))
+    | lt_app2 :
+        forall {G U} (clU: closed 0 (length G) U),
+        forall {t T t'} (tTU: G |-d t : TAll T U ~> t'),
+        forall {u u'} (uT: G |-d u : T ~> u'),
+        R (Tm uT) (Tm (t_app clU tTU uT))
+    | lt_dapp1 :
+        forall {G t T U t'} (tTU: G |-d t : TAll T U ~> t'),
+        forall {x e'} (xT: G |-d `x : T ~> e'),
+        R (Tm tTU) (Tm (t_dapp tTU xT))
+    | lt_dapp2 :
+        forall {G t T U t'} (tTU: G |-d t : TAll T U ~> t'),
+        forall {x e'} (xT: G |-d `x : T ~> e'),
+        R (Tm xT) (Tm (t_dapp tTU xT))
+    | lt_typ_tm :
+        forall {G T T'} (wfT: G |-d T ~> T'),
+        R (Ty wfT) (Tm (t_typ wfT))
+    | lt_sub
+
+  Theorem wfR: well_founded R.
+     Admitted.*)
+  Definition D2CC (j: judgment): Prop :=
+    match j with
+    | @Cx G G' _ => CC.wfCx G' /\ length G = length G'
+    | @Ty G T T' _ => forall {G'}, G |-d ~> G' -> CC.hasType G' T' CC.prop
+    | @Tm G e T e' _ => 
+        forall {G'}, G |-d ~> G' -> forall {T T'}, G |-d T ~> T' ->
+        CC.hasType G' e' T'
+    | @Sub G T U c _ => 
+        forall {G'}, G |-d ~> G' ->
+        forall {T T'}, G |-d T ~> T' ->
+        forall {U U'}, G |-d U ~> U' ->
+        CC.hasType G' c (CC.TAll T' U')
+    end.
+
+  Fixpoint num (n: nat): Nat :=
+    match n with
+    | 0 => Z
+    | S n' => Suc (num n')
+    end.
+
+  Coercion num : nat >-> Nat.
+  
+  Inductive lt : Nat -> Nat -> Prop :=
+    | ltZ: forall {n}, lt Z n
+    | ltS: forall {m n}, lt m n -> lt m (Suc n).
+
+  Corollary ltSZ: forall {n: nat}, ~ lt (S n) 0.
+  Proof.
+    induction n.
+    - simpl. intuition.
+
+  Theorem pres: forall {n j}, lt (size j) (num n) -> D2CC j.
+  Proof.
+    induction n.
+    - simpl. destruct j. destruct w. simpl. auto.
+      3: destruct h.
+      2: destruct w.
+      all: simpl; inversion 1.
+
+  (* Preservation *
   Fixpoint t_Cx {G G'} (wfGG' : G |-d ~> G') : Cx G G'
     with t_Ty {G T T'} (wfTT' : G |-d T ~> T') : Ty G T T'
     with t_Tm {G e T e'} (eTe' : G |-d e : T ~> e') : Tm G e T e'
@@ -1729,9 +1887,19 @@ Module D.
         constructor; assumption. assumption. apply wfTy_closed in H10.
         rewrite <- H5. intuition. apply hasType_closed in eTe'. 
         rewrite <- H5. intuition.
+      - apply wfTy_closed in H1 as H2. intuition. 
+        (* Might cause fixpoint to fail !!! *)
+        replace T' with (CC.open 0 u' T'). 
+        replace T' with (CC.close (length G) 0 T').
+        apply hasType_wfTy in eTe'2 as H5. destruct H5.
+        econstructor. eapply t_Tm; try eassumption.
+        econstructor. eapply closed_monotonic. eassumption. lia. lia.
+        eassumption. erewrite open_closed. eapply wf_weak. eassumption.
+        econstructor; eassumption. eassumption. eapply t_Tm; eassumption.
+        eapply CC.close_closed. eassumption. eapply CC.open_closed.
+        eassumption. lia.
       - admit.
-      - admit.
-      - admit.
+      - inversion H1. subst.
       - admit.
 
     * admit.
@@ -1742,9 +1910,15 @@ Module D.
 End D.
 
 (* TODO: 
-   1. Prove thinning
-   2. Prove weakening
-   3. Prove inversion lemmas
-   4. Prove that expressions in System D<:> map to beta-equivalent expressions
-      in CoC.
- *)
+ * 1. I have proved that G |-d e : T ~> e' -> exists G', G |-d ~> G'
+ * 2. I need to prove that G |-d e : T ~> e' -> exists T', G |-d T ~> T'
+ * 3. I need to prove that G |-d e : T ~> e' -> G' |-cc e' : T', where I
+      get G' and T' from the above two. How to do this is hard.
+ * 4. Sometimes, I'm forced to confront G |-d ~> G1, G |-d ~> G2. I think
+      these two contexts must be beta-equivalent. Can I add some constraints
+      to force them to only use subtyping in the first few steps or something,
+      to make them actually equal proofs? 
+ * 5. In my attempts at a proof sketch, I have terms that syntactically grow.
+      Search for '!!!' to find an instance. What do I do about these? Maybe
+      define an ordering on them? Can I? 
+   *)*)
