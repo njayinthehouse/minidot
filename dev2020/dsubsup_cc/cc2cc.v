@@ -1,4 +1,4 @@
-Require Import List PeanoNat.
+Require Import Lia List PeanoNat.
 Import Notations.
 
 Axiom proof_irrelevance: forall {P: Prop} (p1 p2: P), p1 = p2.
@@ -114,11 +114,10 @@ Inductive equals: expr -> expr -> Prop :=
   where "e == u" := (equals e u).
 
 Inductive hasType: cx -> expr -> expr -> Prop :=
-  | t_ax: forall {g}, wfCx g -> hasType g prop type
+  | t_ax: forall {g}, hasType g prop type
 
   | t_var: 
-      forall {g}, wfCx g ->
-      forall {x T}, lookup g x T ->
+      forall {g x T}, lookup g x T ->
       hasType g `x T
 
   | t_all:
@@ -163,140 +162,116 @@ Inductive hasType: cx -> expr -> expr -> Prop :=
       forall {g e T}, hasType g e T ->
       forall {U}, T == U ->
       forall {s}, hasType g U (TSort s) ->
-      hasType g e U
+      hasType g e U.
 
-  with wfCx: cx -> Prop :=
+Inductive wfCx: cx -> Prop :=
   | wf_nil: wfCx nil
   | wf_snoc: 
-      forall {g T s}, hasType g T (TSort s) -> 
+      forall {g}, wfCx g ->
+      forall {T} {s: sort}, hasType g T s -> 
       wfCx (g ~ T).
 
+Theorem lookup_closed:
+  forall {g: cx} {x T}, lookup g x T -> closed 0 (length g) `x.
+Proof.
+  induction 1.
+  - constructor. simpl. lia.
+  - inversion IHlookup. constructor. simpl. lia.
+Qed.
+
 Theorem hasType_closed: 
-  forall {g: cx} {e T}, hasType g e T ->
-  closed 0 (length g) e /\ closed 0 (length g) T.
-Admitted.
+  forall {g e T}, hasType g e T -> closed 0 (length g) e.
+Proof.
+  induction 1; auto; try solve [constructor; auto].
+  eapply lookup_closed. eassumption.
+Qed.
 
-Theorem hasType_wfCx:
-  forall {g e T}, hasType g e T -> wfCx g.
-Admitted.
+Inductive lookupTr: cx -> fVar -> expr -> cx -> fVar -> expr -> Prop :=
+  | tr_top: forall {g T g' T'}, 
+      lookupTr (g ~ T) (length g) T (g' ~ T') (length g') T'
 
-Inductive Cx: forall {g}, wfCx g -> cx -> Prop :=
-  | tr_nil: Cx wf_nil nil
+  | tr_pop: 
+      forall {g x T g' x' T'}, lookupTr g x T g' x' T' ->
+      forall {U U'}, lookupTr (g ~ U) x T (g' ~ U') x' T'.
 
-  | tr_cons: 
-      forall {g T s} {wfT: hasType g T (TSort s)}
-      {g' T' s'}, Expr wfT g' T' (TSort s') ->
-      Cx (wf_snoc wfT) (g' ~ T')
-
-  with Expr: forall {g e T}, hasType g e T -> cx -> expr -> expr -> Prop :=
+  Inductive hasTypeTr: cx -> expr -> expr -> cx -> expr -> expr -> Prop :=
   | tr_ax: 
-      forall {g} {G: wfCx g} {g'}, Cx G g' ->
-      Expr (t_ax G) g' prop type
+      forall {g g'}, hasTypeTr g prop type g' prop type
 
   | tr_var:
-      forall {g T s} {wfT: hasType g T (TSort s)} 
-      {g' T' s'}, Expr wfT g' T' (TSort s') ->
-      forall {x} (lx: lookup g x T), 
-      Expr (t_var (hasType_wfCx wfT) lx) g' `x T'
+      forall {g x T g' x' T'}, lookupTr g x T g' x' T' ->
+      hasTypeTr g `x T g' `x' T'
 
   | tr_all:
-      forall {g T sT} {wfT: hasType g T (TSort sT)} {g' T' sT'}, 
-      Expr wfT g' T' (TSort sT') ->
-      forall {U sU} {wfU: hasType (g ~ T) (U *^ ` (length g)) (TSort sU)}
-      {U' sU'}, Expr wfU (g' ~ T') (U' *^ ` (length g')) (TSort sU') ->
-      forall (cl: closed 1 (length g) U),
-      Expr (t_all wfT wfU cl) g' (TAll T' U') sU'
+      forall {g T g' T'} {sT sT': sort}, hasTypeTr g T sT g' T' sT' ->
+      forall {U U'} {s s': sort}, hasTypeTr (g ~ T) (U *^ ` (length g)) s 
+                                    (g' ~ T') (U'*^ ` (length g')) s' ->
+      hasTypeTr g (TAll T U) s g' (TAll T' U') s'
+  
+  | tr_lam: 
+      forall {g T g' T'} {sT sT': sort}, hasTypeTr g T sT g' T' sT' ->
+      forall {e U e' U'}, 
+      hasTypeTr (g ~ T) (e *^ ` (length g)) (U *^ ` (length g))
+                (g' ~ T') (e' *^ ` (length g')) (U' *^ ` (length g')) ->
+      hasTypeTr g (tLam e) (TAll T U) g' (tLam e') (TAll T' U')
 
-  | tr_lam:
-      forall {g T sT} {wfT: hasType g T (TSort sT)} {g' T' sT'}, 
-      Expr wfT g' T' (TSort sT') ->
-      forall {U sU} {wfU: hasType (g ~ T) (U *^ ` (length g)) (TSort sU)}
-      {U' sU'}, Expr wfU (g' ~ T') (U' *^ ` (length g')) (TSort sU') ->
-      forall {e} {eT: hasType (g ~ T) (e *^ ` (length g)) (U *^ ` (length g))},
-      forall {e'}, Expr eT (g' ~ T') (e' *^ ` (length g)) (U' *^ ` (length g)) ->
-      forall {cl1: closed 0 (length g) (TAll T U)} {cl2: closed 1 (length g) e},
-      Expr (@t_lam _ _ _ wfT e U eT cl1 cl2) g' (tLam e') (TAll T' U')
-
-  | tr_app:
-      forall {g T sT} {wfT: hasType g T (TSort sT)} {g' T' sT'}, 
-      Expr wfT g' T' (TSort sT') ->
-      forall {U sU} {wfU: hasType g U (TSort sU)} {U' sU'}, 
-      Expr wfU g' U' (TSort sU') ->
-      forall {e} {eTU: hasType g e (TAll T U)} {e'},
-      Expr eTU g' e' (TAll T' U') ->
-      forall {u} {uT: hasType g u T} {u'},
-      Expr uT g' u' T' ->
-      Expr (t_app eTU uT) g' (tApp e' u') U'
+  | tr_app: forall {g e T U g' e' T' U'}, 
+      hasTypeTr g e (TAll T U) g' e' (TAll T' U') ->
+      forall {u u'}, hasTypeTr g u T g' u' T' ->
+      hasTypeTr g (tApp e u) (U *^ u) g' (tApp e' u') (U' *^ u')
 
   | tr_sig:
-      forall {g T sT} {wfT: hasType g T (TSort sT)} {g' T' sT'}, 
-      Expr wfT g' T' (TSort sT') ->
-      forall {U sU} {wfU: hasType (g ~ T) (U *^ ` (length g)) (TSort sU)}
-      {U' sU'}, Expr wfU (g' ~ T') (U' *^ ` (length g')) (TSort sU') ->
-      forall (cl: closed 1 (length g) U),
-      Expr (t_all wfT wfU cl) g' (TSig T' U') sU'
+      forall {g T g' T'} {sT sT': sort}, hasTypeTr g T sT g' T' sT' ->
+      forall {U U'} {s s': sort}, hasTypeTr (g ~ T) (U *^ ` (length g)) s 
+                                    (g' ~ T') (U'*^ ` (length g')) s' ->
+      hasTypeTr g (TSig T U) s g' (TSig T' U') s'
 
-  | tr_pair:
-      forall {g T U s} {wfp: hasType g (TSig T U) (TSort s)} {g' T' U' s'},
-      Expr wfp g' (TSig T' U') (TSort s') ->
-      forall {t} {tT: hasType g t T} {t'},
-      Expr tT g' t' T' ->
-      forall {u} {uU: hasType g u (U *^ t)} {u'},
-      Expr uU g' u' (U' *^ t') ->
-      Expr (t_pair wfp tT uU) g' (tPair t' u') (TSig T' U')
+  | tr_pair: forall {g T U g' T' U'} {s s': sort}, 
+      hasTypeTr g (TSig T U) s g' (TSig T' U') s' ->
+      forall {t t'}, hasTypeTr g t T g' t' T' ->
+      forall {u u'}, hasTypeTr g u (U *^ t) g' u' (U' *^ t') ->
+      hasTypeTr g (tPair t u) (TSig T U) g' (tPair t' u') (TSig T' U')
 
-  | tr_fst:
-      forall {g e T U} {eT: hasType g e (TSig T U)} {g' e' T' U'},
-      Expr eT g' e' (TSig T' U') ->
-      Expr (t_fst eT) g' (tFst e') T'
-  
-  | tr_snd:
-      forall {g e T U} {eT: hasType g e (TSig T U)} {g' e' T' U'},
-      Expr eT g' e' (TSig T' U') ->
-      Expr (t_snd eT) g' (tSnd e') (U' *^ tFst e').
+  | tr_fst: forall {g T U g' T' U'} {s s': sort}, 
+      forall {e e'}, hasTypeTr g e (TSig T U) g' e' (TSig T' U') ->
+      hasTypeTr g (tFst e) T g' (tFst e') T'
 
-Theorem Expr_Cx: 
-  forall {g e T} {eT: hasType g e T} {g' e' T'}, Expr eT g' e' T' ->
-  Cx (hasType_wfCx eT) g'.
+  | tr_snd: forall {g T U g' T' U'} {s s': sort},
+      forall {e e'}, hasTypeTr g e (TSig T U) g' e' (TSig T' U') ->
+      hasTypeTr g (tSnd e) (U *^ tFst e) g' (tSnd e') (U' *^ tFst e').
+
+Inductive wfCxTr: cx -> cx -> Prop :=
+  | tr_nil: wfCxTr nil nil
+
+  | tr_snoc: 
+      forall {g g'}, wfCxTr g g' ->
+      forall {T T'} {s s': sort}, hasTypeTr g T s g' T' s' ->
+      wfCxTr (g ~ T) (g' ~ T').
+
+Theorem lookupTr_lookup:
+  forall {g x T g' x' T'}, lookupTr g x T g' x' T' ->
+  lookup g x T /\ lookup g' x' T'.
 Proof.
-  induction 1. 
-  - assert (hasType_wfCx (t_ax G) = G). apply proof_irrelevance.
-    rewrite H0. assumption.
-  - assert (hasType_wfCx (t_var (hasType_wfCx wfT)))
+  induction 1.
+  - repeat constructor.
+  - intuition; constructor; assumption.
+Qed.
 
-Theorem tr_cx_length: 
-  forall {g} {G: wfCx g} {g'}, Cx G g' -> length g = length g'.
+Theorem hasTypeTr_hasType: 
+  forall {g e T g' e' T'}, hasTypeTr g e T g' e' T' ->
+  hasType g e T /\ hasType g' e' T'.
 Proof.
-  induction 1; auto. simpl. 
-
-Fixpoint tr_expr
-  {g e T} {eT: hasType g e T}
-  {g' e' T'} (etr: Expr eT g' e' T')
-  : hasType g' e' T'
-
-  with tr_cx
-  {g} {G: wfCx g} {g'} (cxtr: Cx G g')
-  : wfCx g'
-Proof.
-  * destruct etr.
-    - constructor. eapply tr_cx; eassumption.
-    - constructor. eapply hasType_wfCx. eapply tr_expr; eassumption.
-      admit (* lookup *).
-    - econstructor. eapply tr_expr. eassumption. eapply tr_expr. eassumption.
-      admit (* closed *).
-    - econstructor. eapply tr_expr. eassumption. eapply tr_expr. 
-      assert (length g = length g') by admit. rewrite <- H. eassumption.
-      admit. admit.
-    - assert (U' = U' *^ u') by admit. rewrite H. econstructor.
-      eapply tr_expr. eassumption. eapply tr_expr. eassumption.
-    - econstructor. eapply tr_expr. eassumption. eapply tr_expr. eassumption.
-      admit (* closed *).
-    - econstructor. eapply tr_expr. eassumption. eapply tr_expr. eassumption.
-      eapply tr_expr. eassumption.
-    - econstructor. eapply tr_expr. eassumption.
-    - econstructor. eapply tr_expr. eassumption.
-
-  * destruct G.
-    - inversion ctr. constructor.
-    - eapply tr_cx. eassumption.
+  induction 1.
+  - repeat constructor.
+  - apply lookupTr_lookup in H. split; constructor; intuition.
+  - split; econstructor; try intuition eauto; admit (* closed *). 
+  - split; econstructor; try intuition eauto; admit. 
+  - split; econstructor; intuition eauto.
+  - split; econstructor; try intuition eauto; admit.
+  - split; econstructor; intuition eauto.
+  - split; econstructor; intuition eauto.
+  - split; econstructor; intuition eauto.
 Admitted.
+
+
+
