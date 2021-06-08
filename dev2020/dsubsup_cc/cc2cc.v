@@ -270,7 +270,7 @@ Theorem hasTypeTr_hasType:
 Proof.
   induction 1; split; econstructor; try intuition eauto.
   1,2: apply lookupTr_lookup in H; intuition.
-Admitted.
+  all: admit (* closed *).
 
 Theorem lookup_lookupTr:
   forall {g x T}, lookup g x T ->
