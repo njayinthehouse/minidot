@@ -232,13 +232,20 @@ Inductive lookupTr: cx -> fVar -> expr -> cx -> fVar -> expr -> Prop :=
       forall {u u'}, hasTypeTr g u (U *^ t) g' u' (U' *^ t') ->
       hasTypeTr g (tPair t u) (TSig T U) g' (tPair t' u') (TSig T' U')
 
-  | tr_fst: forall {g T U g' T' U'} {s s': sort}, 
+  | tr_fst: forall {g T U g' T' U'}, 
       forall {e e'}, hasTypeTr g e (TSig T U) g' e' (TSig T' U') ->
       hasTypeTr g (tFst e) T g' (tFst e') T'
 
-  | tr_snd: forall {g T U g' T' U'} {s s': sort},
+  | tr_snd: forall {g T U g' T' U'},
       forall {e e'}, hasTypeTr g e (TSig T U) g' e' (TSig T' U') ->
-      hasTypeTr g (tSnd e) (U *^ tFst e) g' (tSnd e') (U' *^ tFst e').
+      hasTypeTr g (tSnd e) (U *^ tFst e) g' (tSnd e') (U' *^ tFst e')
+
+  | tr_conv: 
+      forall {g e T g' e' T'}, hasTypeTr g e T g' e' T' ->
+      forall {U}, T == U ->
+      forall {U'}, T' == U' ->
+      forall {s s': sort}, hasTypeTr g U s g' U' s' ->
+      hasTypeTr g e U g' e' U'.
 
 Inductive wfCxTr: cx -> cx -> Prop :=
   | tr_nil: wfCxTr nil nil
@@ -261,17 +268,21 @@ Theorem hasTypeTr_hasType:
   forall {g e T g' e' T'}, hasTypeTr g e T g' e' T' ->
   hasType g e T /\ hasType g' e' T'.
 Proof.
-  induction 1.
-  - repeat constructor.
-  - apply lookupTr_lookup in H. split; constructor; intuition.
-  - split; econstructor; try intuition eauto; admit (* closed *). 
-  - split; econstructor; try intuition eauto; admit. 
-  - split; econstructor; intuition eauto.
-  - split; econstructor; try intuition eauto; admit.
-  - split; econstructor; intuition eauto.
-  - split; econstructor; intuition eauto.
-  - split; econstructor; intuition eauto.
+  induction 1; split; econstructor; try intuition eauto.
+  1,2: apply lookupTr_lookup in H; intuition.
 Admitted.
 
+Theorem lookup_lookupTr:
+  forall {g x T}, lookup g x T ->
+  lookupTr g x T g x T.
+Proof.
+  induction 1; constructor. auto.
+Qed.
 
-
+Theorem hasType_hasTypeTr:
+  forall {g e T}, hasType g e T -> 
+  hasTypeTr g e T g e T.
+Proof.
+  induction 1; try solve [econstructor; eauto].
+  constructor. apply lookup_lookupTr. auto.
+Qed.
